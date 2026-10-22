@@ -192,22 +192,28 @@ describe("error mapping", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("timeout and network failures map to transient on writes", async () => {
+  test("timeout and network failures on writes say the outcome is unknown, on reads they stay retryable", async () => {
     const timeout = new DOMException("The operation timed out.", "TimeoutError");
     const a = await failure(
       harness([timeout]).client.request({ method: "POST", url: URL_, body: {} }),
     );
-    expect(a.code).toBe("timeout");
+    expect(a.code).toBe("write_outcome_unknown");
     expect(a.category).toBe("transient");
-    const b = await failure(
-      harness([new TypeError("fetch failed")]).client.request({
-        method: "POST",
-        url: URL_,
-        body: {},
-      }),
+    expect(a.exitCode).toBe(3);
+    expect(a.hint).toContain("may have been applied");
+    expect(a.hint).not.toMatch(/safe to retry|or retry\./);
+    for (const method of ["PUT", "PATCH", "DELETE"] as const) {
+      const reset = await failure(
+        harness([new TypeError("fetch failed")]).client.request({ method, url: URL_ }),
+      );
+      expect(reset.code).toBe("write_outcome_unknown");
+      expect(reset.exitCode).toBe(3);
+    }
+    const read = await failure(
+      harness([timeout, timeout, timeout]).client.request({ method: "GET", url: URL_ }),
     );
-    expect(b.code).toBe("network_error");
-    expect(b.category).toBe("transient");
+    expect(read.code).toBe("timeout");
+    expect(read.hint).toContain("retry");
   });
 
   test("invalid JSON in a 200 is an internal error", async () => {
@@ -344,6 +350,150 @@ describe("retries", () => {
   });
 });
 
+const API_URL = "https://api.atlassian.com/ex/jira/c1/rest/api/3/attachment/content/1";
+const MEDIA_URL = "https://api.media.atlassian.com/file/abc/binary?token=signed";
+
+function redirect(location: string, status = 302): Response {
+  return new Response(null, { status, headers: { location } });
+}
+
+function header(call: Recorded, name: string): string | null {
+  return new Headers(call.init.headers).get(name);
+}
+
+describe("requestRaw", () => {
+  test("sends the token to the API origin and returns the unread response", async () => {
+    const bytes = new Uint8Array([0, 255, 128, 10]);
+    const { client, calls } = harness([new Response(bytes)]);
+    const response = await client.requestRaw({ method: "GET", url: API_URL });
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    const call = at(calls, 0);
+    expect(header(call, "authorization")).toBe("Bearer tok-123");
+    expect(header(call, "user-agent")).toBe(USER_AGENT);
+    expect(header(call, "accept")).toBe("*/*");
+    expect(call.init.redirect).toBe("manual");
+  });
+
+  test("multipart body and extra headers pass through; no JSON content-type is set", async () => {
+    const { client, calls } = harness([json([{ id: "1" }])]);
+    const form = new FormData();
+    form.append("file", new File(["hi"], "a.txt"));
+    await client.requestRaw({
+      method: "POST",
+      url: API_URL,
+      body: form,
+      accept: "application/json",
+      headers: { "X-Atlassian-Token": "no-check", Authorization: "Bearer attacker" },
+    });
+    const call = at(calls, 0);
+    expect(call.init.body).toBe(form);
+    expect(header(call, "content-type")).toBeNull();
+    expect(header(call, "x-atlassian-token")).toBe("no-check");
+    expect(header(call, "accept")).toBe("application/json");
+    expect(header(call, "authorization")).toBe("Bearer tok-123");
+  });
+
+  test("a cross-origin redirect hop carries no Authorization, even one passed by the caller", async () => {
+    const { client, calls } = harness([redirect(MEDIA_URL), new Response("payload")]);
+    const response = await client.requestRaw({
+      method: "GET",
+      url: API_URL,
+      headers: { Authorization: "Bearer attacker" },
+    });
+    expect(await response.text()).toBe("payload");
+    expect(calls.map((c) => c.url)).toEqual([API_URL, MEDIA_URL]);
+    expect(header(at(calls, 0), "authorization")).toBe("Bearer tok-123");
+    expect(header(at(calls, 1), "authorization")).toBeNull();
+  });
+
+  test("a redirect back to the API origin is authorized again", async () => {
+    const { client, calls } = harness([redirect(MEDIA_URL), redirect(API_URL), new Response("ok")]);
+    await client.requestRaw({ method: "GET", url: API_URL });
+    expect(header(at(calls, 1), "authorization")).toBeNull();
+    expect(header(at(calls, 2), "authorization")).toBe("Bearer tok-123");
+  });
+
+  test("a redirect to http is refused before anything is sent to it", async () => {
+    const { client, calls } = harness([redirect("http://api.atlassian.com/steal"), json({})]);
+    const error = await failure(client.requestRaw({ method: "GET", url: API_URL }));
+    expect(error.code).toBe("insecure_url");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an http request URL is refused outright", async () => {
+    const { client, calls } = harness([json({})]);
+    const error = await failure(
+      client.requestRaw({ method: "GET", url: "http://api.atlassian.com/x" }),
+    );
+    expect(error.code).toBe("insecure_url");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("303 turns a POST into a bodyless GET; 307 keeps method and body", async () => {
+    const see = harness([redirect("/next", 303), new Response("ok")]);
+    await see.client.requestRaw({ method: "POST", url: API_URL, body: "x" });
+    expect(at(see.calls, 1).init.method).toBe("GET");
+    expect(at(see.calls, 1).init.body).toBeUndefined();
+
+    const keep = harness([redirect("/next", 307), new Response("ok")]);
+    await keep.client.requestRaw({ method: "POST", url: API_URL, body: "x" });
+    expect(at(keep.calls, 1).init.method).toBe("POST");
+    expect(at(keep.calls, 1).init.body).toBe("x");
+  });
+
+  test("redirect loops stop with too_many_redirects", async () => {
+    const { client, calls } = harness(Array.from({ length: 10 }, () => redirect(API_URL)));
+    const error = await failure(client.requestRaw({ method: "GET", url: API_URL }));
+    expect(error.code).toBe("too_many_redirects");
+    expect(calls).toHaveLength(6);
+  });
+
+  test("non-2xx maps like request: status, category, server message", async () => {
+    const { client } = harness([
+      json({ errorMessages: ["Issue does not exist"] }, { status: 404 }),
+    ]);
+    const error = await failure(client.requestRaw({ method: "GET", url: API_URL }));
+    expect(error.code).toBe("http_404");
+    expect(error.status).toBe(404);
+    expect(error.category).toBe("api");
+    expect(error.message).toBe(
+      "GET /ex/jira/c1/rest/api/3/attachment/content/1 failed with HTTP 404: Issue does not exist",
+    );
+
+    const denied = harness([json({}, { status: 403 })]);
+    expect(
+      (await failure(denied.client.requestRaw({ method: "GET", url: API_URL }))).category,
+    ).toBe("auth");
+  });
+
+  test("a non-2xx behind a redirect is mapped against the requested URL", async () => {
+    const { client } = harness([redirect(MEDIA_URL), new Response("gone", { status: 410 })]);
+    const error = await failure(client.requestRaw({ method: "GET", url: API_URL }));
+    expect(error.status).toBe(410);
+    expect(error.message).toContain("/attachment/content/1");
+  });
+
+  test("GET retries on 503 within the budget; POST sends once", async () => {
+    const get = harness([json({}, { status: 503 }), new Response("ok")]);
+    expect(await (await get.client.requestRaw({ method: "GET", url: API_URL })).text()).toBe("ok");
+    expect(get.calls).toHaveLength(2);
+    expect(get.sleeps).toHaveLength(1);
+
+    const post = harness([json({}, { status: 503 }), new Response("ok")]);
+    const error = await failure(
+      post.client.requestRaw({ method: "POST", url: API_URL, body: "x" }),
+    );
+    expect(error.status).toBe(503);
+    expect(post.calls).toHaveLength(1);
+  });
+
+  test("network errors on a POST say the outcome is unknown", async () => {
+    const { client } = harness([new TypeError("fetch failed")]);
+    const error = await failure(client.requestRaw({ method: "POST", url: API_URL, body: "x" }));
+    expect(error.code).toBe("write_outcome_unknown");
+  });
+});
+
 describe("parseRetryAfter", () => {
   test("seconds, HTTP date, junk, absent", () => {
     expect(parseRetryAfter("3")).toBe(3000);
@@ -379,5 +529,34 @@ describe("extractErrorMessage", () => {
     const message = extractErrorMessage(JSON.stringify({ message: "x".repeat(2000) }));
     expect(message?.length).toBe(500);
     expect(message?.endsWith("...")).toBe(true);
+  });
+
+  test("an HTML error page reduces to its title, never the markup or CSS", () => {
+    const page = `<!doctype html><html lang="en"><head><title>HTTP Status 429 &ndash; Too Many Requests</title><style type="text/css">body {font-family:Tahoma;} ${"h1 {color:white;} ".repeat(40)}</style></head><body><h1>HTTP Status 429 - Too Many Requests</h1><hr class="line" /><p><b>Type</b> Status Report</p></body></html>`;
+    expect(extractErrorMessage(page)).toBe("HTTP Status 429 &ndash; Too Many Requests");
+    expect(
+      extractErrorMessage("<html><body><h1>Bad &amp; gateway</h1><p>x</p></body></html>"),
+    ).toBe("Bad & gateway");
+    const stripped = extractErrorMessage(
+      `<html><body><style>.a{}</style><div>Service <b>unavailable</b></div>${"<p>word </p>".repeat(100)}</body></html>`,
+    );
+    expect(stripped?.startsWith("Service unavailable word word")).toBe(true);
+    expect(stripped?.length).toBeLessThanOrEqual(200);
+    expect(stripped).not.toContain("<");
+  });
+
+  test("a rate-limited response with an HTML body keeps the message short and the Retry-After hint", async () => {
+    const page = `<html><head><title>HTTP Status 429 - Too Many Requests</title><style>${"x".repeat(900)}</style></head><body></body></html>`;
+    const { client } = harness([
+      new Response(page, {
+        status: 429,
+        headers: { "content-type": "text/html", "retry-after": "533" },
+      }),
+    ]);
+    const error = await failure(client.request({ method: "POST", url: URL_, body: {} }));
+    expect(error.message).toBe(
+      "POST /ex/confluence/cid/wiki/api/v2/pages/1 failed with HTTP 429: HTTP Status 429 - Too Many Requests",
+    );
+    expect(error.hint).toContain("533");
   });
 });

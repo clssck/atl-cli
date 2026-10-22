@@ -1,9 +1,12 @@
 import { registry, registerCommands } from "../core/cli.ts";
 import { authCommands, authGroups } from "./auth.ts";
+import { boardCommands, boardGroups } from "./board.ts";
 import { compassCommands, compassGroups } from "./compass.ts";
 import { confluenceWriteCommands } from "./confluence-write.ts";
 import { confluenceCommands, confluenceGroups } from "./confluence.ts";
 import { graphCommands, graphGroups } from "./graph.ts";
+import { jiraBulkCommands, jiraBulkGroups } from "./jira-bulk.ts";
+import { jiraAttachmentCommands } from "./jira-attachments.ts";
 import { jiraWriteCommands } from "./jira-write.ts";
 import { jiraCommands, jiraGroups } from "./jira.ts";
 import { mcpCommands, mcpGroups } from "./mcp.ts";
@@ -19,6 +22,9 @@ registerCommands([
   ...confluenceWriteCommands,
   ...jiraCommands,
   ...jiraWriteCommands,
+  ...jiraAttachmentCommands,
+  ...jiraBulkCommands,
+  ...boardCommands,
   ...searchCommands,
   ...compassCommands,
   ...graphCommands,
@@ -29,6 +35,8 @@ registerCommands([
 registry.describeGroups({
   ...authGroups,
   ...confluenceGroups,
+  ...jiraBulkGroups,
+  ...boardGroups,
   ...jiraGroups,
   ...searchGroups,
   ...compassGroups,

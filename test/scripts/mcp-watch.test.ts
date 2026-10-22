@@ -6,6 +6,7 @@ import {
   type WatchResult,
   collect,
   diff,
+  DOCS_URL,
   fingerprint,
   GITHUB_RAW,
   main,
@@ -22,14 +23,26 @@ interface Upstream {
   remotes: string[];
   scopes: string[];
   v3: boolean;
+  /** Markdown of the supported-tools page. */
+  docs: string;
   failUrls?: string[];
 }
+
+const docsPage = (...rows: string[]): string =>
+  ["# Supported tools", "", "| Tool | Description |", "|------|-------------|", ...rows, ""].join(
+    "\n",
+  );
 
 const BASE: Upstream = {
   serverVersion: "2.0.0",
   remotes: ["https://mcp.atlassian.com/v2/mcp", "https://mcp.atlassian.com/v1/mcp/authv2"],
   scopes: ["read:me", "offline_access", "read:jira-work"],
   v3: false,
+  docs: docsPage(
+    "| `getJiraIssue` *(Primary)* | Get an issue; not `notATool`. |",
+    "| `executeWrite`, `executeRead` *(Primary)* | Execution pathways. |",
+    "| `getJiraIssue` | Listed twice. |",
+  ),
 };
 
 function json(body: unknown, status = 200): Response {
@@ -55,6 +68,9 @@ function fakeFetch(upstream: Upstream, seen: string[] = []): FetchLike {
     }
     if (input === `${GITHUB_RAW}/plugin.json`) {
       return json({ name: "atlassian", version: "1.0.0" });
+    }
+    if (input === DOCS_URL) {
+      return new Response(upstream.docs, { headers: { "Content-Type": "text/markdown" } });
     }
     if (input.startsWith(`${REGISTRY_URL}?search=com.atlassian/atlassian-mcp-server`)) {
       return json({
@@ -117,12 +133,15 @@ describe("collect", () => {
       latest: { version: "2.0.0", remotes: ["https://mcp.atlassian.com/v2/mcp"] },
       versions: ["1.1.3", "2.0.0"],
     });
+    expect(forward.docs).toEqual({
+      supportedTools: ["executeRead", "executeWrite", "getJiraIssue"],
+    });
   });
 
   test("sends the watcher User-Agent on every request", async () => {
     const seen: string[] = [];
     await collect(fakeFetch(BASE, seen));
-    expect(seen.length).toBeGreaterThanOrEqual(6);
+    expect(seen.length).toBeGreaterThanOrEqual(7);
   });
 
   test("keeps the baseline value of a failed source and reports it unavailable", async () => {
@@ -136,6 +155,13 @@ describe("collect", () => {
     ]);
     expect(failed.snapshot.github.plugin).toEqual(baseline.github.plugin);
     expect(failed.snapshot.github.server.version).toBe("2.1.0");
+  });
+
+  test("fails the docs source when the page lists no tools", async () => {
+    const { snapshot: baseline } = await collect(fakeFetch(BASE));
+    const empty = await collect(fakeFetch({ ...BASE, docs: "# Moved\n" }), baseline);
+    expect(empty.unavailable.map((entry) => entry.source)).toEqual(["docs.supportedTools"]);
+    expect(empty.snapshot.docs).toEqual(baseline.docs);
   });
 });
 
@@ -175,6 +201,35 @@ describe("diff", () => {
     const entries = diff(await before, after);
     expect(entries.every((entry) => entry.path.startsWith('resources["v3/mcp"].'))).toBe(true);
     expect(entries).toContainEqual({ path: 'resources["v3/mcp"].status', before: 404, after: 200 });
+  });
+
+  test("detects an added and a removed documented tool", async () => {
+    const { snapshot: after } = await collect(
+      fakeFetch({
+        ...BASE,
+        docs: docsPage(
+          "| `getJiraIssue` | x |",
+          "| `createJiraBoard` | x |",
+          "| `executeRead` | x |",
+        ),
+      }),
+    );
+    const entries = diff(await before, after);
+    expect(entries).toEqual([
+      {
+        path: "docs.supportedTools",
+        before: ["executeRead", "executeWrite", "getJiraIssue"],
+        after: ["createJiraBoard", "executeRead", "getJiraIssue"],
+      },
+    ]);
+    const body = renderIssueBody({
+      changed: true,
+      fingerprint: fingerprint(after),
+      diff: entries,
+      unavailable: [],
+      snapshot: after,
+    });
+    expect(body).toContain("- `docs.supportedTools`: `+createJiraBoard` `-executeWrite`");
   });
 });
 
@@ -225,6 +280,7 @@ describe("main", () => {
     ["github.server", `${GITHUB_RAW}/server.json`],
     ["github.plugin", `${GITHUB_RAW}/plugin.json`],
     ["registry", REGISTRY_SEARCH],
+    ["docs.supportedTools", DOCS_URL],
     ['resources["v2/mcp"]', `${MCP_ORIGIN}/.well-known/oauth-protected-resource/v2/mcp`],
   ])("when %s is unavailable", (source, url) => {
     test("exits 0, reports it, and shows no diff against the baseline", async () => {
@@ -293,7 +349,12 @@ describe("main", () => {
   });
 
   test("exits 1 with baseline_invalid when the baseline does not match the snapshot shape", async () => {
-    const bad = JSON.stringify({ github: { server: { name: "x" } }, registry: {}, resources: {} });
+    const bad = JSON.stringify({
+      github: { server: { name: "x" } },
+      registry: {},
+      resources: {},
+      docs: { supportedTools: [] },
+    });
     await writeFile(snapshotPath, bad);
     const invalid = await run(["--write"], BASE);
     expect(invalid.code).toBe(1);
@@ -324,6 +385,7 @@ describe("main", () => {
       `${GITHUB_RAW}/server.json`,
       `${GITHUB_RAW}/plugin.json`,
       REGISTRY_SEARCH,
+      DOCS_URL,
       ...["v1/mcp/authv2", "v2/mcp", "v3/mcp"].map(
         (path) => `${MCP_ORIGIN}/.well-known/oauth-protected-resource/${path}`,
       ),

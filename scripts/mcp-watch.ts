@@ -4,8 +4,9 @@
  * them with the committed baseline in `mcp/upstream.json`.
  *
  * Every source (GitHub server.json, GitHub plugin.json, the MCP registry, each protected-resource
- * probe) is fetched independently with a 30 s per-request timeout. A source that cannot be fetched
- * or parsed is listed in `unavailable` and keeps its baseline value, so it never shows up as a diff.
+ * probe, the public supported-tools doc) is fetched independently with a 30 s per-request timeout.
+ * A source that cannot be fetched or parsed is listed in `unavailable` and keeps its baseline
+ * value, so it never shows up as a diff.
  *
  * Usage: bun scripts/mcp-watch.ts [--write] [--issue-body <path>]
  * Exit codes: 0 compared (see `changed` and `unavailable`), 1 usage error, invalid baseline, or
@@ -21,6 +22,8 @@ export const USER_AGENT = "atl-mcp-watch";
 export const SERVER_NAME = "com.atlassian/atlassian-mcp-server";
 export const GITHUB_RAW = "https://raw.githubusercontent.com/atlassian/atlassian-mcp-server/main";
 export const REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers";
+/** Markdown source of the public supported-tools page; its tables list every documented tool. */
+export const DOCS_URL = "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools.md";
 export const MCP_ORIGIN = "https://mcp.atlassian.com";
 /** Always probed; `v3/mcp` is the next major and answers 404 until Atlassian ships it. */
 export const PROBED_PATHS: readonly string[] = ["v1/mcp/authv2", "v2/mcp", "v3/mcp"];
@@ -58,6 +61,7 @@ const SnapshotSchema = Type.Object({
     versions: Type.Array(Type.String()),
   }),
   resources: Type.Record(Type.String(), ResourceSignalSchema),
+  docs: Type.Object({ supportedTools: Type.Array(Type.String()) }),
 });
 
 export type Remote = Static<typeof RemoteSchema>;
@@ -104,11 +108,16 @@ export class WatchError extends Error {
 
 class UsageError extends Error {}
 
-async function getJson(fetch: FetchLike, url: string, allow404: boolean): Promise<unknown> {
+async function getText(
+  fetch: FetchLike,
+  url: string,
+  accept: string,
+  allow404: boolean,
+): Promise<string | null> {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      headers: { "User-Agent": USER_AGENT, Accept: accept },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (error) {
@@ -121,7 +130,14 @@ async function getJson(fetch: FetchLike, url: string, allow404: boolean): Promis
   if (response.status !== 200) {
     throw new WatchError("fetch_failed", `GET ${url} returned HTTP ${response.status}`, url);
   }
-  const text = await response.text();
+  return response.text();
+}
+
+async function getJson(fetch: FetchLike, url: string, allow404: boolean): Promise<unknown> {
+  const text = await getText(fetch, url, "application/json", allow404);
+  if (text === null) {
+    return null;
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -230,6 +246,26 @@ async function collectResource(fetch: FetchLike, path: string): Promise<Resource
 }
 
 /**
+ * Tool names from the first column of the page's markdown tables, sorted and deduplicated. A row
+ * names a tool as `` `name` ``; a row may name several (`executeRead`, `executeWrite`, ...).
+ */
+async function collectDocs(fetch: FetchLike): Promise<Snapshot["docs"]> {
+  const text = await getText(fetch, DOCS_URL, "text/markdown", false);
+  const names = new Set<string>();
+  for (const line of text?.split("\n") ?? []) {
+    if (line.startsWith("|")) {
+      for (const match of (line.split("|")[1] ?? "").matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g)) {
+        names.add(match[1] ?? "");
+      }
+    }
+  }
+  if (names.size === 0) {
+    throw new WatchError("bad_response", `GET ${DOCS_URL}: no tool names found`, DOCS_URL);
+  }
+  return { supportedTools: [...names].toSorted() };
+}
+
+/**
  * Fetch every source independently and normalize it: arrays sorted, only version-identifying
  * fields kept. A failed source takes its value from `baseline` and is reported unavailable; with no
  * baseline value to take, the failure propagates as a `WatchError`.
@@ -259,7 +295,7 @@ export async function collect(
   };
   const serverUrl = `${GITHUB_RAW}/server.json`;
   const pluginUrl = `${GITHUB_RAW}/plugin.json`;
-  const [server, plugin, registry] = await Promise.all([
+  const [server, plugin, registry, docs] = await Promise.all([
     settle(
       "github.server",
       async () => {
@@ -284,6 +320,7 @@ export async function collect(
       baseline?.github.plugin,
     ),
     settle("registry", () => collectRegistry(fetch), baseline?.registry),
+    settle("docs.supportedTools", () => collectDocs(fetch), baseline?.docs),
   ]);
   // Without a fresh server.json, probe what the baseline probed so no resource appears or vanishes.
   const serverFailed = unavailable.some((entry) => entry.source === "github.server");
@@ -310,6 +347,7 @@ export async function collect(
       github: { server, plugin },
       registry,
       resources: Object.fromEntries(signals.flat()),
+      docs,
     },
     unavailable: unavailable.toSorted((a, b) => a.source.localeCompare(b.source)),
     sources,
@@ -396,8 +434,9 @@ export function renderIssueBody(result: WatchResult): string {
   return [
     `<!-- mcp-watch:${result.fingerprint} -->`,
     "The public Atlassian MCP signals differ from the baseline in `mcp/upstream.json`",
-    "(GitHub `atlassian/atlassian-mcp-server` server.json/plugin.json, the MCP registry, and",
-    "`https://mcp.atlassian.com/.well-known/oauth-protected-resource/*`).",
+    "(GitHub `atlassian/atlassian-mcp-server` server.json/plugin.json, the MCP registry,",
+    "`https://mcp.atlassian.com/.well-known/oauth-protected-resource/*`, and the public",
+    "supported-tools page).",
     "",
     ...unavailableLines,
     "## Diff",
@@ -411,7 +450,8 @@ export function renderIssueBody(result: WatchResult): string {
     "",
     "## Upgrade checklist",
     "",
-    "- [ ] Re-snapshot the tool surface: `atl mcp tools --snapshot --output mcp/tools-v1.json`",
+    "- [ ] Re-snapshot the v1 tool surface: `atl mcp tools --snapshot --output mcp/tools-v1.json`",
+    "- [ ] Refresh the v2 catalog (throwaway `ATL_CONFIG_DIR`, `atl auth login --resource https://mcp.atlassian.com/v2/mcp`, then with `ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp`): `atl mcp tools --snapshot --pretty --output mcp/tools-v2.json` and `atl mcp tools --catalog --pretty --output mcp/operations-v2.json`",
     "- [ ] Run `bun test test/parity.test.ts`",
     "- [ ] Map every new or renamed tool to a command (`mcpTools` in `defineCommand`)",
     "- [ ] Update README.md and docs/design.md",

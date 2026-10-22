@@ -71,6 +71,15 @@ export class AtlError extends Error {
   }
 }
 
+/** An `input` (exit 1) error: bad flags, arguments, or local files. */
+export function inputError(code: string, message: string, hint?: string): AtlError {
+  return new AtlError(message, {
+    code,
+    category: "input",
+    ...(hint === undefined ? {} : { hint }),
+  });
+}
+
 /** Normalize any thrown value into an AtlError (unknown errors are internal). */
 export function toAtlError(error: unknown): AtlError {
   if (error instanceof AtlError) {

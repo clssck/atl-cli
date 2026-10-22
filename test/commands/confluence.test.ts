@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  attachmentGet,
+  attachmentList,
   confluenceCommands,
   confluenceDeps,
   commentGet,
@@ -10,18 +12,27 @@ import {
   commentList,
   commentVersions,
   cql,
+  pageAncestors,
   pageChildren,
+  pageDiff,
   pageGet,
+  pageOperations,
+  pagePermissionsList,
+  pageProperties,
+  pageRestriction,
   pageVersions,
   pageLabels,
   pageTree,
+  spaceGet,
   spaceList,
   spacePages,
+  spacePersonal,
 } from "../../src/commands/confluence.ts";
 import type { CommandContext, CommandSpec } from "../../src/core/cli.ts";
 import { makeContext } from "../helpers/context.ts";
 import { AtlError } from "../../src/core/errors.ts";
 import { isRecord } from "../../src/core/guards.ts";
+import { prune, sourceMarkdown } from "../../src/core/output.ts";
 
 interface Call {
   url: URL;
@@ -30,6 +41,7 @@ interface Call {
 let configDir: string;
 let calls: Call[] = [];
 let routes: Map<string, unknown> = new Map();
+let handlers: Map<string, (url: URL) => unknown> = new Map();
 
 function adf(text: string): string {
   return JSON.stringify({
@@ -42,6 +54,11 @@ function adf(text: string): string {
 /** Routes are keyed by path (after `/wiki`), without the query string. */
 function route(path: string, body: unknown): void {
   routes.set(path, body);
+}
+
+/** A route whose body depends on the request, e.g. its `version` query. */
+function routeBy(path: string, handler: (url: URL) => unknown): void {
+  handlers.set(path, handler);
 }
 
 beforeAll(async () => {
@@ -64,7 +81,11 @@ beforeAll(async () => {
     const url = new URL(input);
     calls.push({ url });
     const path = url.pathname.replace("/ex/confluence/cloud-1/wiki", "");
-    const body = routes.get(path);
+    const handler = handlers.get(path);
+    const body = handler === undefined ? routes.get(path) : handler(url);
+    if (body instanceof Response) {
+      return Promise.resolve(body);
+    }
     if (body === undefined) {
       return Promise.resolve(
         new Response(JSON.stringify({ message: `no route ${path}` }), {
@@ -85,6 +106,7 @@ beforeAll(async () => {
 afterEach(() => {
   calls = [];
   routes = new Map();
+  handlers = new Map();
 });
 
 afterAll(async () => {
@@ -161,6 +183,16 @@ describe("confluenceCommands", () => {
   test("exposes every read command with no side effects", () => {
     expect(confluenceCommands.map((c) => c.name)).toEqual([
       "page.get",
+      "page.ancestors",
+      "page.diff",
+      "page.permissions.list",
+      "page.restriction",
+      "page.operations",
+      "page.properties",
+      "attachment.list",
+      "attachment.get",
+      "space.get",
+      "space.personal",
       "page.tree",
       "page.children",
       "page.versions",
@@ -180,14 +212,18 @@ describe("confluenceCommands", () => {
 describe("page.get", () => {
   test("requests ADF and renders markdown with a compact shape", async () => {
     route("/api/v2/pages/123456", PAGE);
+    route("/api/v2/pages/100", { id: "100", title: "Handbook" });
     const result = await run(pageGet, { page: "123456" });
-    expect(lastQuery().get("body-format")).toBe("atlas_doc_format");
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("atlas_doc_format");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url.pathname).toEndWith("/api/v2/pages/100");
+    expect(calls[1]?.url.searchParams.has("body-format")).toBe(false);
     expect(result).toEqual({
       id: "123456",
       type: "page",
       title: "Runbook",
       spaceId: "98765",
-      parentId: "100",
+      parent: { id: "100", title: "Handbook" },
       status: "current",
       version: 4,
       authorId: "acc-author",
@@ -201,8 +237,8 @@ describe("page.get", () => {
   test("storage format requests body-format=storage and passes XHTML through", async () => {
     route("/api/v2/pages/123456", PAGE);
     const result = await run(pageGet, { page: "123456" }, { format: "storage" });
-    expect(lastQuery().get("body-format")).toBe("storage");
-    expect(result).toMatchObject({ body: "<p>Hello <b>world</b></p>" });
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("storage");
+    expect(result).toMatchObject({ body: ["<p>Hello <b>world</b></p>"] });
   });
 
   test("adf format returns the parsed document", async () => {
@@ -243,6 +279,159 @@ describe("page.get", () => {
     const error = await rejection(run(pageGet, { page: "ari:cloud:confluence::comment/777" }));
     expect(error.category).toBe("input");
     expect(error.next).toEqual([["atl", "comment", "get", "777"]]);
+  });
+});
+
+describe("page.get parent and --grep", () => {
+  const BODY_TEXTS = [
+    "intro",
+    "Cold storage: 90 days",
+    "middle",
+    "cold storage again",
+    "outro",
+    "tail",
+  ];
+  // Markdown paragraphs are separated by blank lines: the hits are lines 3 and 7 of 11.
+  const GREP_PAGE = {
+    ...PAGE,
+    parentId: undefined,
+    body: {
+      atlas_doc_format: { representation: "atlas_doc_format", value: paragraphs(...BODY_TEXTS) },
+    },
+  };
+
+  test("a non-page parent carries its type and costs no extra request", async () => {
+    route("/api/v2/pages/123456", { ...PAGE, parentId: "55", parentType: "folder" });
+    const result = await run(pageGet, { page: "123456" });
+    expect(asRecord(result).parent).toEqual({ id: "55", type: "folder" });
+    expect(asRecord(result)).not.toHaveProperty("parentId");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a parent the caller cannot read keeps its id; a top-level page has no parent", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    expect(asRecord(await run(pageGet, { page: "123456" })).parent).toEqual({ id: "100" });
+    calls = [];
+    route("/api/v2/pages/123456", GREP_PAGE);
+    const top = asRecord(await run(pageGet, { page: "123456" }));
+    expect(top.parent).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  test("--full stays raw and sends no parent request", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    await run(pageGet, { page: "123456" }, {}, ctx({ full: true }));
+    expect(calls).toHaveLength(1);
+  });
+
+  test("--grep returns matching lines with 1-based numbers instead of the body", async () => {
+    route("/api/v2/pages/123456", GREP_PAGE);
+    const result = await run(pageGet, { page: "123456" }, { grep: "cold storage" });
+    expect(result).toEqual({
+      id: "123456",
+      title: "Runbook",
+      version: 4,
+      url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456",
+      lines: 11,
+      matches: [
+        { from: 3, text: ["Cold storage: 90 days"] },
+        { from: 7, text: ["cold storage again"] },
+      ],
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("--context adds surrounding lines and merges overlapping or adjacent ranges", async () => {
+    route("/api/v2/pages/123456", GREP_PAGE);
+    const apart = await run(pageGet, { page: "123456" }, { grep: "storage", context: 1 });
+    expect(asRecord(apart).matches).toEqual([
+      { from: 2, to: 4, hits: [3], text: ["", "Cold storage: 90 days", ""] },
+      { from: 6, to: 8, hits: [7], text: ["", "cold storage again", ""] },
+    ]);
+    const adjacent = await run(pageGet, { page: "123456" }, { grep: "storage", context: 2 });
+    expect(asRecord(adjacent).matches).toEqual([
+      {
+        from: 1,
+        to: 9,
+        hits: [3, 7],
+        text: [
+          "intro",
+          "",
+          "Cold storage: 90 days",
+          "",
+          "middle",
+          "",
+          "cold storage again",
+          "",
+          "outro",
+        ],
+      },
+    ]);
+    const edge = await run(pageGet, { page: "123456" }, { grep: "tail", context: 3 });
+    expect(asRecord(edge).matches).toEqual([
+      { from: 8, to: 11, hits: [11], text: ["", "outro", "", "tail"] },
+    ]);
+  });
+
+  test("no match reports the line count with an empty match list", async () => {
+    route("/api/v2/pages/123456", GREP_PAGE);
+    const result = await run(pageGet, { page: "123456" }, { grep: "absent" });
+    expect(result).toMatchObject({ lines: 11, matches: [] });
+  });
+
+  test("a pattern matching everywhere prints 20 ranges and counts the rest", async () => {
+    const many = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
+    route("/api/v2/pages/123456", {
+      ...GREP_PAGE,
+      body: {
+        atlas_doc_format: { representation: "atlas_doc_format", value: paragraphs(...many) },
+      },
+    });
+    const result = asRecord(await run(pageGet, { page: "123456" }, { grep: "row" }));
+    expect(result.matches).toHaveLength(20);
+    expect(result.moreMatches).toBe(5);
+    const few = asRecord(await run(pageGet, { page: "123456" }, { grep: "row 25" }));
+    expect(few.moreMatches).toBeUndefined();
+  });
+
+  test("--grep keeps the parent so one call answers 'which page and under what'", async () => {
+    route("/api/v2/pages/123456", { ...GREP_PAGE, parentId: "100" });
+    route("/api/v2/pages/100", { id: "100", title: "Runbooks" });
+    const result = asRecord(await run(pageGet, { page: "123456" }, { grep: "cold" }));
+    expect(result.parent).toEqual({ id: "100", title: "Runbooks" });
+  });
+
+  test("--grep works with --version and searches storage with --format storage", async () => {
+    route("/api/v2/pages/123456", {
+      ...GREP_PAGE,
+      status: "historical",
+      body: { storage: { value: "<p>one</p>\n<p>two COLD</p>" } },
+    });
+    const result = await run(
+      pageGet,
+      { page: "123456" },
+      { grep: "cold", version: 2, format: "storage" },
+    );
+    expect(calls[0]?.url.searchParams.get("version")).toBe("2");
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("storage");
+    expect(result).toMatchObject({ lines: 2, matches: [{ from: 2, text: ["<p>two COLD</p>"] }] });
+  });
+
+  test("an invalid regex and unusable flag combinations are input errors before any request", async () => {
+    const bad = await rejection(run(pageGet, { page: "123456" }, { grep: "(" }));
+    expect(bad.code).toBe("invalid_regex");
+    expect(bad.category).toBe("input");
+    const orphan = await rejection(run(pageGet, { page: "123456" }, { context: 2 }));
+    expect(orphan.code).toBe("invalid_flag_combination");
+    const full = await rejection(
+      run(pageGet, { page: "123456" }, { grep: "x" }, ctx({ full: true })),
+    );
+    expect(full.code).toBe("invalid_flag_combination");
+    const adfFormat = await rejection(
+      run(pageGet, { page: "123456" }, { grep: "x", format: "adf" }),
+    );
+    expect(adfFormat.code).toBe("invalid_flag_combination");
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -373,7 +562,7 @@ describe("space.list / space.pages", () => {
     expect(calls[0]?.url.searchParams.get("keys")).toBe("ENG");
     expect(lastQuery().get("title")).toBe("Home");
     expect(lastQuery().get("status")).toBe("current");
-    expect(result).toEqual({ items: [{ id: "7", title: "Home" }], nextCursor: null });
+    expect(result).toEqual({ items: [{ id: "7", title: "Home", type: "page" }], nextCursor: null });
   });
 
   test("pages skips the lookup for numeric space ids", async () => {
@@ -386,7 +575,8 @@ describe("space.list / space.pages", () => {
     route("/api/v2/spaces", { results: [] });
     const error = await rejection(run(spacePages, { space: "NOPE" }));
     expect(error.code).toBe("space_not_found");
-    expect(error.category).toBe("input");
+    expect(error.category).toBe("api");
+    expect(error.exitCode).toBe(2);
   });
 });
 
@@ -438,10 +628,14 @@ describe("comment.list", () => {
     expect(lastQuery().getAll("accountId")).toEqual(["acc-1"]);
   });
 
-  test("--inline uses /inline-comments and exposes resolution and selection", async () => {
+  test("--kind inline uses /inline-comments and exposes resolution and selection", async () => {
     routeUsers();
     route("/api/v2/pages/123456/inline-comments", { results: [INLINE_COMMENT] });
-    const result = await run(commentList, { page: "123456" }, { inline: true, resolution: "open" });
+    const result = await run(
+      commentList,
+      { page: "123456" },
+      { kind: "inline", resolution: "open" },
+    );
     expect(calls[0]?.url.pathname).toEndWith("/pages/123456/inline-comments");
     expect(calls[0]?.url.searchParams.get("resolution-status")).toBe("open");
     expect(itemsOf(result)[0]).toEqual({
@@ -454,9 +648,14 @@ describe("comment.list", () => {
     });
   });
 
-  test("--resolution without --inline is an input error and sends no request", async () => {
+  test("--resolution without --kind inline is an input error and sends no request", async () => {
     const error = await rejection(run(commentList, { page: "123456" }, { resolution: "open" }));
     expect(error.category).toBe("input");
+    expect(calls).toHaveLength(0);
+    const all = await rejection(
+      run(commentList, { page: "123456" }, { kind: "all", resolution: "open" }),
+    );
+    expect(all.code).toBe("invalid_flag_combination");
     expect(calls).toHaveLength(0);
   });
 
@@ -466,6 +665,7 @@ describe("comment.list", () => {
     route("/api/v2/footer-comments/9001/children", {
       results: [{ ...FOOTER_COMMENT, id: "9002", parentCommentId: "9001" }],
     });
+    route("/api/v2/footer-comments/9002/children", { results: [] });
     const result = await run(commentList, { page: "123456" }, { replies: true, limit: 5 });
     expect(itemsOf(result)).toEqual([
       {
@@ -486,8 +686,30 @@ describe("comment.list", () => {
     ]);
     expect(calls[1]?.url.pathname).toEndWith("/footer-comments/9001/children");
     expect(calls[1]?.url.searchParams.get("limit")).toBe("5");
-    expect(calls).toHaveLength(3);
+    expect(calls[2]?.url.pathname).toEndWith("/footer-comments/9002/children");
+    expect(calls).toHaveLength(4);
     expect(lastQuery().getAll("accountId")).toEqual(["acc-1"]);
+  });
+
+  test("--replies follows a thread to its full depth, not one level", async () => {
+    routeUsers();
+    route("/api/v2/pages/123456/footer-comments", { results: [FOOTER_COMMENT] });
+    for (const [parent, child] of [
+      ["9001", "9002"],
+      ["9002", "9003"],
+      ["9003", "9004"],
+    ]) {
+      route(`/api/v2/footer-comments/${parent}/children`, {
+        results: [{ ...FOOTER_COMMENT, id: child, parentCommentId: parent }],
+      });
+    }
+    route("/api/v2/footer-comments/9004/children", { results: [] });
+    const result = await run(commentList, { page: "123456" }, { replies: true });
+    const depth = (node: unknown): string[] => {
+      const { id, replies } = asRecord(node);
+      return [String(id), ...(Array.isArray(replies) ? depth(replies[0]) : [])];
+    };
+    expect(depth(itemsOf(result)[0])).toEqual(["9001", "9002", "9003", "9004"]);
   });
 
   test("--replies reports repliesNextCursor and --full keeps raw comments", async () => {
@@ -496,6 +718,7 @@ describe("comment.list", () => {
       results: [{ ...FOOTER_COMMENT, id: "9002", parentCommentId: "9001" }],
       _links: { next: "/wiki/api/v2/footer-comments/9001/children?cursor=RC&limit=1" },
     });
+    route("/api/v2/footer-comments/9002/children", { results: [] });
     const full = await run(
       commentList,
       { page: "123456" },
@@ -511,13 +734,108 @@ describe("comment.list", () => {
     expect(calls.some((call) => call.url.pathname.endsWith("/user/bulk"))).toBe(false);
   });
 
-  test("--replies with --inline fetches from the inline children endpoint", async () => {
+  test("--replies with --kind inline fetches from the inline children endpoint", async () => {
     route("/api/v2/pages/123456/inline-comments", { results: [INLINE_COMMENT] });
     route("/api/v2/inline-comments/9100/children", { results: [] });
     routeUsers();
-    const result = await run(commentList, { page: "123456" }, { inline: true, replies: true });
+    const result = await run(commentList, { page: "123456" }, { kind: "inline", replies: true });
     expect(calls[1]?.url.pathname).toEndWith("/inline-comments/9100/children");
     expect(asRecord(itemsOf(result)[0]).replies).toBeUndefined();
+  });
+
+  describe("--kind all", () => {
+    const FOOTER_PATH = "/api/v2/pages/123456/footer-comments";
+    const INLINE_PATH = "/api/v2/pages/123456/inline-comments";
+
+    test("returns footer then inline in one result, each item tagged with its kind", async () => {
+      routeUsers();
+      route(FOOTER_PATH, { results: [FOOTER_COMMENT] });
+      route(INLINE_PATH, { results: [INLINE_COMMENT] });
+      const result = await run(commentList, { page: "123456" }, { kind: "all" });
+      expect(itemsOf(result)).toEqual([
+        {
+          kind: "footer",
+          id: "9001",
+          author: "Ada Lovelace",
+          updated: "2026-03-01T10:00:00Z",
+          body: ["Looks good"],
+        },
+        {
+          kind: "inline",
+          id: "9100",
+          author: "Grace Hopper",
+          updated: "2026-03-02T10:00:00Z",
+          resolutionStatus: "open",
+          selection: "Hello",
+          body: ["Typo?"],
+        },
+      ]);
+      expect(asRecord(result).nextCursor).toBeNull();
+      expect(calls.filter((call) => call.url.pathname.endsWith("/user/bulk"))).toHaveLength(1);
+    });
+
+    test("--replies nests each kind's replies from that kind's children endpoint", async () => {
+      routeUsers();
+      route(FOOTER_PATH, { results: [FOOTER_COMMENT] });
+      route(INLINE_PATH, { results: [INLINE_COMMENT] });
+      route("/api/v2/footer-comments/9001/children", {
+        results: [{ ...FOOTER_COMMENT, id: "9002", parentCommentId: "9001" }],
+      });
+      route("/api/v2/footer-comments/9002/children", { results: [] });
+      route("/api/v2/inline-comments/9100/children", {
+        results: [{ ...INLINE_COMMENT, id: "9101", parentCommentId: "9100" }],
+      });
+      route("/api/v2/inline-comments/9101/children", { results: [] });
+      const result = await run(commentList, { page: "123456" }, { kind: "all", replies: true });
+      const [footer, inline] = itemsOf(result).map(asRecord);
+      expect(footer).toMatchObject({ kind: "footer", id: "9001", replies: [{ id: "9002" }] });
+      expect(inline).toMatchObject({ kind: "inline", id: "9100", replies: [{ id: "9101" }] });
+    });
+
+    test("--limit applies to each kind and one cursor resumes only the kinds with more", async () => {
+      routeUsers();
+      routeBy(FOOTER_PATH, (url) =>
+        url.searchParams.has("cursor")
+          ? { results: [{ ...FOOTER_COMMENT, id: "9003" }] }
+          : {
+              results: [FOOTER_COMMENT],
+              _links: { next: `/wiki${FOOTER_PATH}?cursor=F2&limit=1` },
+            },
+      );
+      route(INLINE_PATH, { results: [INLINE_COMMENT] });
+      const first = await run(commentList, { page: "123456" }, { kind: "all", limit: 1 });
+      expect(calls.filter((call) => call.url.pathname.endsWith("-comments"))).toHaveLength(2);
+      expect(
+        calls.map((call) => call.url.searchParams.get("limit")).filter((limit) => limit !== null),
+      ).toEqual(["1", "1"]);
+      const cursor = asRecord(first).nextCursor;
+      expect(typeof cursor).toBe("string");
+
+      calls = [];
+      const second = await run(commentList, { page: "123456" }, { kind: "all", limit: 1, cursor });
+      const paged = calls.filter((call) => call.url.pathname.includes("-comments"));
+      expect(paged).toHaveLength(1);
+      expect(paged[0]?.url.pathname).toEndWith(FOOTER_PATH);
+      expect(paged[0]?.url.searchParams.get("cursor")).toBe("F2");
+      expect(itemsOf(second).map((item) => asRecord(item).id)).toEqual(["9003"]);
+      expect(asRecord(second).nextCursor).toBeNull();
+    });
+
+    test("--full tags raw comments and a foreign cursor is an input error", async () => {
+      route(FOOTER_PATH, { results: [FOOTER_COMMENT] });
+      route(INLINE_PATH, { results: [INLINE_COMMENT] });
+      const full = await run(commentList, { page: "123456" }, { kind: "all" }, ctx({ full: true }));
+      expect(itemsOf(full)).toEqual([
+        { kind: "footer", ...FOOTER_COMMENT },
+        { kind: "inline", ...INLINE_COMMENT },
+      ]);
+      calls = [];
+      const error = await rejection(
+        run(commentList, { page: "123456" }, { kind: "all", cursor: "bogus" }),
+      );
+      expect(error.code).toBe("invalid_cursor");
+      expect(calls).toHaveLength(0);
+    });
   });
 
   test("blog post refs use /blogposts/", async () => {
@@ -550,10 +868,10 @@ describe("comment.get / versions", () => {
     });
   });
 
-  test("get --inline uses the inline endpoint with --format adf", async () => {
+  test("get --kind inline uses the inline endpoint with --format adf", async () => {
     routeUsers();
     route("/api/v2/inline-comments/9100", INLINE_COMMENT);
-    const result = await run(commentGet, { comment: "9100" }, { inline: true, format: "adf" });
+    const result = await run(commentGet, { comment: "9100" }, { kind: "inline", format: "adf" });
     expect(calls[0]?.url.pathname).toEndWith("/inline-comments/9100");
     expect(result).toMatchObject({ body: { type: "doc" }, author: "Grace Hopper" });
   });
@@ -760,21 +1078,6 @@ describe("cql", () => {
 });
 
 describe("MCP read parity flags", () => {
-  test("read commands declare the MCP tools they replace", () => {
-    const mapped = Object.fromEntries(
-      confluenceCommands.map((spec) => [spec.name, spec.mcpTools ?? []]),
-    );
-    expect(mapped).toMatchObject({
-      "page.get": ["getConfluencePage"],
-      "page.tree": ["getConfluencePageDescendants"],
-      "space.list": ["getConfluenceSpaces"],
-      "space.pages": ["getPagesInConfluenceSpace"],
-      "comment.list": ["getConfluencePageFooterComments", "getConfluencePageInlineComments"],
-      "comment.replies": ["getConfluenceCommentChildren"],
-      cql: ["searchConfluenceUsingCql"],
-    });
-  });
-
   test("space.list maps ids, status, labels, favorited-by and sort to repeated v2 params", async () => {
     route("/api/v2/spaces", { results: [] });
     await run(
@@ -856,7 +1159,7 @@ describe("MCP read parity flags", () => {
 
   test("comment.replies passes sort", async () => {
     route("/api/v2/inline-comments/9100/children", { results: [] });
-    await run(commentReplies, { comment: "9100" }, { inline: true, sort: "modified-date" });
+    await run(commentReplies, { comment: "9100" }, { kind: "inline", sort: "modified-date" });
     expect(lastQuery().get("sort")).toBe("modified-date");
     expect(lastQuery().get("body-format")).toBe("atlas_doc_format");
   });
@@ -870,5 +1173,1004 @@ describe("MCP read parity flags", () => {
     );
     expect(lastQuery().get("cqlcontext")).toBe('{"spaceKey":"ENG"}');
     expect(lastQuery().get("expand")).toBe("content.version");
+  });
+});
+
+function paragraphs(...texts: string[]): string {
+  return JSON.stringify({
+    type: "doc",
+    version: 1,
+    content: texts.map((text) => ({ type: "paragraph", content: [{ type: "text", text }] })),
+  });
+}
+
+describe("page.get --version and --format view", () => {
+  test("--version requests that version and drops the throwaway url of a historical page", async () => {
+    route("/api/v2/pages/123456", {
+      ...PAGE,
+      status: "historical",
+      version: { number: 2, createdAt: "2026-01-03T00:00:00.000Z" },
+      _links: {
+        webui: "/pages/viewpage.action?pageId=999",
+        base: "https://acme.atlassian.net/wiki",
+      },
+    });
+    const result = await run(pageGet, { page: "123456" }, { version: 2 });
+    expect(calls[0]?.url.searchParams.get("version")).toBe("2");
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("atlas_doc_format");
+    expect(result).toMatchObject({ version: 2, status: "historical", body: ["Hello world"] });
+    expect(asRecord(result).url).toBeUndefined();
+  });
+
+  test("no --version sends no version parameter", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    await run(pageGet, { page: "123456" });
+    expect(calls[0]?.url.searchParams.has("version")).toBe(false);
+  });
+
+  test("--format view requests body-format=view and returns the rendered HTML as lines", async () => {
+    route("/api/v2/pages/123456", {
+      ...PAGE,
+      body: { view: { representation: "view", value: "<p>Hello <b>world</b></p>" } },
+    });
+    const result = await run(pageGet, { page: "123456" }, { format: "view" });
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("view");
+    expect(result).toMatchObject({ body: ["<p>Hello <b>world</b></p>"] });
+  });
+
+  test("--format view on a blog post at a version uses /blogposts/", async () => {
+    route("/api/v2/blogposts/555", { ...PAGE, id: "555", body: { view: { value: "<p>x</p>" } } });
+    await run(pageGet, { page: "555" }, { format: "view", version: 3, type: "blogpost" });
+    expect(calls[0]?.url.pathname).toEndWith("/api/v2/blogposts/555");
+    expect(calls[0]?.url.searchParams.get("version")).toBe("3");
+  });
+});
+
+describe("page.ancestors", () => {
+  const SEARCH = {
+    results: [
+      {
+        content: {
+          id: "123456",
+          ancestors: [
+            { id: "1", type: "page", title: "Home" },
+            { id: "2", type: "folder", title: "Docs" },
+            { id: "3", type: "page", title: "Parent" },
+          ],
+        },
+      },
+    ],
+  };
+
+  test("expands content.ancestors through CQL and lists root first", async () => {
+    route("/rest/api/search", SEARCH);
+    const result = await run(pageAncestors, { page: "123456" });
+    expect(lastQuery().get("cql")).toBe("id = 123456");
+    expect(lastQuery().get("expand")).toBe("content.ancestors");
+    expect(result).toEqual({
+      items: [
+        { id: "1", title: "Home" },
+        { id: "2", title: "Docs", type: "folder" },
+        { id: "3", title: "Parent" },
+      ],
+    });
+  });
+
+  test("--limit keeps the nearest ancestors", async () => {
+    route("/rest/api/search", SEARCH);
+    const result = await run(pageAncestors, { page: "123456" }, { limit: 2 });
+    expect(itemsOf(result)).toEqual([
+      { id: "2", title: "Docs", type: "folder" },
+      { id: "3", title: "Parent" },
+    ]);
+  });
+
+  test("a top-level page has no items", async () => {
+    route("/rest/api/search", { results: [{ content: { id: "123456" } }] });
+    expect(await run(pageAncestors, { page: "123456" })).toEqual({ items: [] });
+  });
+
+  test("an unknown page is page_not_found", async () => {
+    route("/rest/api/search", { results: [] });
+    const error = await rejection(run(pageAncestors, { page: "123456" }));
+    expect(error.code).toBe("page_not_found");
+  });
+
+  test("a non-numeric id is rejected before any request", async () => {
+    const error = await rejection(run(pageAncestors, { page: "x:y" }));
+    expect(error.category).toBe("input");
+    expect(calls).toEqual([]);
+  });
+
+  test("blog posts are rejected before any request", async () => {
+    const error = await rejection(
+      run(pageAncestors, {
+        page: "https://acme.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/555/T",
+      }),
+    );
+    expect(error.code).toBe("unsupported_for_blogpost");
+    expect(calls).toEqual([]);
+  });
+
+  test("--full returns the raw search response", async () => {
+    route("/rest/api/search", SEARCH);
+    expect(await run(pageAncestors, { page: "123456" }, {}, ctx({ full: true }))).toEqual(SEARCH);
+  });
+});
+
+function versions(bodies: Record<number, string>, current: number): void {
+  routeBy("/api/v2/pages/123456", (url) => {
+    const requested = url.searchParams.get("version");
+    const number = requested === null ? current : Number(requested);
+    return {
+      ...PAGE,
+      status: requested === null ? "current" : "historical",
+      version: { number },
+      body: { atlas_doc_format: { value: bodies[number] } },
+    };
+  });
+}
+
+describe("page.diff", () => {
+  test("defaults to the previous version against the current one", async () => {
+    versions(
+      { 2: paragraphs("alpha", "beta", "gamma"), 3: paragraphs("alpha", "BETA", "gamma") },
+      3,
+    );
+    const result = await run(pageDiff, { page: "123456" });
+    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual([null, "2"]);
+    expect(result).toEqual({
+      id: "123456",
+      title: "Runbook",
+      from: 2,
+      to: 3,
+      added: 1,
+      removed: 1,
+      diff: ["@@ -1,5 +1,5 @@", " alpha", " ", "-beta", "+BETA", " ", " gamma"],
+    });
+  });
+
+  test("--from and --to pick versions; --context 0 leaves only the changes", async () => {
+    versions(
+      {
+        1: paragraphs("one", "two", "three", "four"),
+        4: paragraphs("one", "2", "three", "four", "five"),
+      },
+      9,
+    );
+    const result = await run(pageDiff, { page: "123456" }, { from: 1, to: 4, context: 0 });
+    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual(["4", "1"]);
+    expect(result).toMatchObject({ from: 1, to: 4, added: 3, removed: 1 });
+    expect(asRecord(result).diff).toEqual([
+      "@@ -3,1 +3,1 @@",
+      "-two",
+      "+2",
+      "@@ -7,0 +8,2 @@",
+      "+",
+      "+five",
+    ]);
+  });
+
+  test("identical versions give counts and no diff", async () => {
+    versions({ 1: paragraphs("same"), 2: paragraphs("same") }, 2);
+    const result = await run(pageDiff, { page: "123456" });
+    expect(result).toMatchObject({ added: 0, removed: 0 });
+    expect(asRecord(result).diff).toEqual([]);
+  });
+
+  test("version 1 has nothing to diff against", async () => {
+    versions({ 1: paragraphs("only") }, 1);
+    const error = await rejection(run(pageDiff, { page: "123456" }));
+    expect(error.code).toBe("no_previous_version");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("--format storage diffs the XHTML", async () => {
+    routeBy("/api/v2/pages/123456", (url) => {
+      const first = url.searchParams.get("version") === "1";
+      return {
+        ...PAGE,
+        version: { number: first ? 1 : 2 },
+        body: { storage: { value: first ? "<p>a</p>" : "<p>b</p>" } },
+      };
+    });
+    const result = await run(pageDiff, { page: "123456" }, { format: "storage" });
+    expect(lastQuery().get("body-format")).toBe("storage");
+    expect(asRecord(result).diff).toEqual(["@@ -1,1 +1,1 @@", "-<p>a</p>", "+<p>b</p>"]);
+  });
+
+  test("a long changed line is wrapped and every piece keeps its marker", async () => {
+    const long = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+    versions({ 1: paragraphs("start"), 2: paragraphs("start", long) }, 2);
+    const rows = asRecord(await run(pageDiff, { page: "123456" })).diff;
+    if (!Array.isArray(rows)) {
+      throw new Error("expected diff rows");
+    }
+    expect(rows.filter((row) => String(row).startsWith("+word")).length).toBeGreaterThan(1);
+    expect(rows.every((row) => Buffer.byteLength(JSON.stringify(row)) <= 610)).toBe(true);
+  });
+
+  test("a rewrite beyond the exact-search budget is one deletion block and one insertion block", async () => {
+    const before = Array.from({ length: 2500 }, (_, i) => `old ${i}`);
+    const after = Array.from({ length: 2500 }, (_, i) => `new ${i}`);
+    versions({ 1: paragraphs(...before), 2: paragraphs(...after) }, 2);
+    const result = await run(pageDiff, { page: "123456" }, { context: 0 });
+    expect(result).toMatchObject({ added: 4999, removed: 4999 });
+  });
+
+  test("--full returns both raw page versions", async () => {
+    versions({ 1: paragraphs("a"), 2: paragraphs("b") }, 2);
+    const result = asRecord(await run(pageDiff, { page: "123456" }, {}, ctx({ full: true })));
+    expect(asRecord(result.from).version).toEqual({ number: 1 });
+    expect(asRecord(result.to).version).toEqual({ number: 2 });
+  });
+});
+
+describe("page.permissions.list, restriction, operations, properties", () => {
+  test("permissions: user grants show display names, groups their id; filters pass through", async () => {
+    routeUsers();
+    route("/api/v2/pages/123456/permissions", {
+      results: [
+        { operation: "update", principal: { principalType: "user", principalId: "acc-1" } },
+        { operation: "read", principal: { principalType: "group", principalId: "g-1" } },
+      ],
+    });
+    const result = await run(
+      pagePermissionsList,
+      { page: "123456" },
+      { operation: "update", principalType: "user", principalId: "acc-1" },
+    );
+    expect(calls[0]?.url.searchParams.get("operation")).toBe("update");
+    expect(calls[0]?.url.searchParams.get("principal-type")).toBe("user");
+    expect(calls[0]?.url.searchParams.get("principal-id")).toBe("acc-1");
+    expect(result).toMatchObject({
+      items: [
+        { operation: "update", user: "Ada Lovelace" },
+        { operation: "read", group: "g-1" },
+      ],
+    });
+  });
+
+  test("permissions --full returns the raw grants without a user lookup", async () => {
+    const grant = {
+      operation: "read",
+      principal: { principalType: "user", principalId: "acc-1" },
+      createdAt: "2026-01-01T00:00:00Z",
+    };
+    route("/api/v2/pages/123456/permissions", { results: [grant] });
+    const result = await run(pagePermissionsList, { page: "123456" }, {}, ctx({ full: true }));
+    expect(itemsOf(result)).toEqual([grant]);
+    expect(calls.some((call) => call.url.pathname.endsWith("/user/bulk"))).toBe(false);
+  });
+
+  test("permissions on a blog post use /blogposts/", async () => {
+    route("/api/v2/blogposts/555/permissions", { results: [] });
+    expect(await run(pagePermissionsList, { page: "555" }, { type: "blogpost" })).toMatchObject({
+      items: [],
+    });
+  });
+
+  test("restriction returns the state without _links; --full keeps them", async () => {
+    const body = { state: "OPEN", _links: { base: "https://acme.atlassian.net/wiki" } };
+    route("/api/v2/pages/123456/restriction-state", body);
+    expect(await run(pageRestriction, { page: "123456" })).toEqual({ state: "OPEN" });
+    expect(await run(pageRestriction, { page: "123456" }, {}, ctx({ full: true }))).toEqual(body);
+  });
+
+  test("operations: own-type operations by name, create and other targets as operation:target", async () => {
+    const body = {
+      operations: [
+        { operation: "read", targetType: "page" },
+        { operation: "delete", targetType: "page" },
+        { operation: "create", targetType: "page" },
+        { operation: "create", targetType: "folder" },
+      ],
+    };
+    route("/api/v2/pages/123456/operations", body);
+    expect(await run(pageOperations, { page: "123456" })).toEqual({
+      operations: ["read", "delete", "create:page", "create:folder"],
+    });
+    expect(await run(pageOperations, { page: "123456" }, {}, ctx({ full: true }))).toEqual(body);
+  });
+
+  test("operations on a blog post name blogpost operations", async () => {
+    route("/api/v2/blogposts/555/operations", {
+      operations: [{ operation: "update", targetType: "blogpost" }],
+    });
+    expect(await run(pageOperations, { page: "555" }, { type: "blogpost" })).toEqual({
+      operations: ["update"],
+    });
+  });
+
+  test("properties: key and value as stored, --key filters server-side", async () => {
+    route("/api/v2/pages/123456/properties", {
+      results: [
+        { id: "1", key: "state", value: { stage: "Review" }, version: { number: 3 } },
+        { id: "2", key: "legacy", value: '{"a":1}' },
+      ],
+    });
+    const result = await run(pageProperties, { page: "123456" }, { key: "state" });
+    expect(lastQuery().get("key")).toBe("state");
+    expect(result).toMatchObject({
+      items: [
+        { key: "state", value: { stage: "Review" } },
+        { key: "legacy", value: '{"a":1}' },
+      ],
+    });
+  });
+
+  test("properties on a blog post, --full, and cursor paging", async () => {
+    route("/api/v2/blogposts/555/properties", {
+      results: [{ id: "1", key: "k", value: 1 }],
+      _links: { next: "/api/v2/blogposts/555/properties?cursor=abc" },
+    });
+    const compact = asRecord(
+      await run(pageProperties, { page: "555" }, { type: "blogpost", limit: 1 }),
+    );
+    expect(compact.nextCursor).toBe("abc");
+    const full = await run(
+      pageProperties,
+      { page: "555" },
+      { type: "blogpost", limit: 1 },
+      ctx({ full: true }),
+    );
+    expect(itemsOf(full)).toEqual([{ id: "1", key: "k", value: 1 }]);
+  });
+});
+
+describe("attachment.list and attachment.get", () => {
+  const ATTACHMENT = {
+    id: "att77",
+    title: "diagram.png",
+    version: { number: 2, when: "2026-01-02T03:04:05.000Z", by: { displayName: "Ada" } },
+    container: { id: "123456" },
+    extensions: { mediaType: "image/png", fileSize: 1024 },
+  };
+  const REPORT = {
+    id: "att78",
+    title: "report.pdf",
+    version: { number: 1, when: "2026-01-02T03:04:05.000Z", by: { publicName: "Grace" } },
+    extensions: { mediaType: "application/pdf", fileSize: 9, comment: "q3" },
+  };
+
+  test("list: CQL scopes to the container; compact items carry type, size, author", async () => {
+    route("/rest/api/content/search", { results: [ATTACHMENT, REPORT] });
+    const result = await run(attachmentList, { page: "123456" });
+    expect(lastQuery().get("cql")).toBe("type = attachment AND container = 123456");
+    expect(lastQuery().get("expand")).toBe("extensions,version");
+    expect(result).toMatchObject({
+      items: [
+        {
+          id: "att77",
+          title: "diagram.png",
+          mediaType: "image/png",
+          size: 1024,
+          version: 2,
+          by: "Ada",
+          updated: "2026-01-02T03:04:05Z",
+        },
+        {
+          id: "att78",
+          title: "report.pdf",
+          mediaType: "application/pdf",
+          size: 9,
+          comment: "q3",
+          by: "Grace",
+          updated: "2026-01-02T03:04:05Z",
+        },
+      ],
+    });
+  });
+
+  test("list: --filename is an exact, quoted title match and --sort becomes order by", async () => {
+    route("/rest/api/content/search", { results: [] });
+    await run(attachmentList, { page: "123456" }, { filename: 'a "b".png', sort: "-created" });
+    expect(lastQuery().get("cql")).toBe(
+      'type = attachment AND container = 123456 AND title = "a \\"b\\".png" order by created desc',
+    );
+  });
+
+  test("list: --media-type keeps attachments whose type starts with it", async () => {
+    route("/rest/api/content/search", { results: [ATTACHMENT, REPORT] });
+    const result = await run(attachmentList, { page: "123456" }, { mediaType: "image" });
+    expect(itemsOf(result)).toMatchObject([{ id: "att77" }]);
+  });
+
+  test("list: nextCursor continues the search; --full returns raw objects", async () => {
+    route("/rest/api/content/search", {
+      results: [ATTACHMENT],
+      _links: { next: "/rest/api/content/search?cql=x&cursor=c2&limit=1" },
+    });
+    const page = asRecord(await run(attachmentList, { page: "123456" }, { limit: 1 }));
+    expect(page.nextCursor).toBe("c2");
+    await run(attachmentList, { page: "123456" }, { cursor: "c1", limit: 1 });
+    expect(lastQuery().get("cursor")).toBe("c1");
+    const full = await run(attachmentList, { page: "123456" }, { limit: 1 }, ctx({ full: true }));
+    expect(itemsOf(full)).toEqual([ATTACHMENT]);
+  });
+
+  test("list: a non-numeric page id is rejected before any request", async () => {
+    const error = await rejection(run(attachmentList, { page: "x:y" }));
+    expect(error.category).toBe("input");
+    expect(calls).toEqual([]);
+  });
+
+  test("get: a bare number gets the att prefix and the page id is included", async () => {
+    route("/rest/api/content/search", { results: [ATTACHMENT] });
+    const result = await run(attachmentGet, { attachment: "77" });
+    expect(lastQuery().get("cql")).toBe("type = attachment AND id = att77");
+    expect(lastQuery().get("expand")).toBe("extensions,version,container");
+    expect(result).toMatchObject({ id: "att77", pageId: "123456", mediaType: "image/png" });
+  });
+
+  test("get: unknown id is attachment_not_found; malformed id is rejected locally", async () => {
+    route("/rest/api/content/search", { results: [] });
+    expect((await rejection(run(attachmentGet, { attachment: "att9" }))).code).toBe(
+      "attachment_not_found",
+    );
+    calls = [];
+    expect((await rejection(run(attachmentGet, { attachment: "abc" }))).code).toBe(
+      "invalid_attachment_ref",
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("space.get and space.personal", () => {
+  const SPACE = {
+    id: "98765",
+    key: "ENG",
+    name: "Engineering",
+    type: "global",
+    status: "current",
+    homepageId: "100",
+    spaceOwnerId: "acc-1",
+    createdAt: "2026-01-02T03:04:05.000Z",
+    description: { plain: { value: "Team space" } },
+    labels: {
+      results: [
+        { id: "1", name: "runbooks", prefix: "global" },
+        { id: "2", name: "x", prefix: "team" },
+      ],
+    },
+    operations: {
+      results: [
+        { operation: "read", targetType: "space" },
+        { operation: "create", targetType: "page" },
+      ],
+    },
+    properties: { results: [{ id: "9", key: "k", value: { a: 1 } }] },
+    _links: { webui: "/spaces/ENG", base: "https://acme.atlassian.net/wiki" },
+  };
+
+  test("get: resolves a key to the id, asks for plain description and the opted-in extras", async () => {
+    routeUsers();
+    route("/api/v2/spaces", { results: [{ id: "98765" }] });
+    route("/api/v2/spaces/98765", SPACE);
+    const result = await run(
+      spaceGet,
+      { space: "ENG" },
+      { labels: true, operations: true, properties: true },
+    );
+    expect(calls[0]?.url.searchParams.get("keys")).toBe("ENG");
+    const query = calls[1]?.url.searchParams;
+    expect(query?.get("description-format")).toBe("plain");
+    expect(query?.get("include-labels")).toBe("true");
+    expect(query?.get("include-operations")).toBe("true");
+    expect(query?.get("include-properties")).toBe("true");
+    expect(result).toEqual({
+      id: "98765",
+      key: "ENG",
+      name: "Engineering",
+      homepageId: "100",
+      owner: "Ada Lovelace",
+      created: "2026-01-02T03:04:05Z",
+      description: ["Team space"],
+      labels: ["runbooks", "team:x"],
+      operations: ["read", "create:page"],
+      properties: [{ key: "k", value: { a: 1 } }],
+      url: "https://acme.atlassian.net/wiki/spaces/ENG",
+    });
+  });
+
+  test("get: extras are not requested unless asked; a numeric id skips the key lookup", async () => {
+    routeUsers();
+    route("/api/v2/spaces/98765", {
+      ...SPACE,
+      labels: undefined,
+      operations: undefined,
+      properties: undefined,
+    });
+    await run(spaceGet, { space: "98765" });
+    expect(calls[0]?.url.pathname).toEndWith("/api/v2/spaces/98765");
+    expect(calls[0]?.url.searchParams.has("include-labels")).toBe(false);
+  });
+
+  test("get: --full returns the raw space", async () => {
+    route("/api/v2/spaces/98765", SPACE);
+    expect(await run(spaceGet, { space: "98765" }, {}, ctx({ full: true }))).toEqual(SPACE);
+  });
+
+  test("personal: defaults to the caller's account and expands personalSpace", async () => {
+    route("/me", { account_id: "acc-me" });
+    route("/rest/api/user", {
+      accountId: "acc-me",
+      personalSpace: {
+        id: 163842,
+        key: "~acc-me",
+        name: "Ada",
+        _links: { webui: "/spaces/~acc-me" },
+      },
+    });
+    const result = await run(spacePersonal, {});
+    expect(lastQuery().get("accountId")).toBe("acc-me");
+    expect(lastQuery().get("expand")).toBe("personalSpace");
+    expect(result).toEqual({
+      id: "163842",
+      key: "~acc-me",
+      name: "Ada",
+      url: "https://acme.atlassian.net/wiki/spaces/~acc-me",
+    });
+  });
+
+  test("personal: an explicit account id skips /me; no personal space is space_not_found", async () => {
+    route("/rest/api/user", { accountId: "acc-9" });
+    const error = await rejection(run(spacePersonal, { accountId: "acc-9" }));
+    expect(error.code).toBe("space_not_found");
+    expect(calls.map((call) => call.url.href)).not.toContain("https://api.atlassian.com/me");
+    expect(lastQuery().get("accountId")).toBe("acc-9");
+  });
+});
+
+const JSON_HEADERS = { "content-type": "application/json" };
+
+function failure(status: number, message: string): Response {
+  return new Response(JSON.stringify({ message }), { status, headers: JSON_HEADERS });
+}
+
+function stringLines(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((line) => typeof line === "string")) {
+    throw new Error("expected an array of lines");
+  }
+  return value;
+}
+
+interface GrepRange {
+  from: number;
+  to: number;
+  hits: number[];
+  text: string[];
+}
+
+function matchesOf(result: unknown): GrepRange[] {
+  const { matches } = asRecord(result);
+  if (!Array.isArray(matches)) {
+    throw new Error("expected a matches array");
+  }
+  return matches.map((range) => {
+    const entry = asRecord(range);
+    const from = Number(entry.from);
+    return {
+      from,
+      to: entry.to === undefined ? from : Number(entry.to),
+      hits: Array.isArray(entry.hits) ? entry.hits.map(Number) : [from],
+      text: stringLines(entry.text),
+    };
+  });
+}
+
+function treeNode(id: string, depth: number, parentId: string) {
+  return { id, title: `T${id}`, type: "page", status: "current", parentId, depth };
+}
+
+function probedPages(): string[] {
+  return calls
+    .filter((call) => call.url.pathname.endsWith("/direct-children"))
+    .map((call) => call.url.pathname.split("/").at(-2) ?? "")
+    .toSorted();
+}
+
+function storagePage(value: string) {
+  return { ...PAGE, body: { storage: { value } } };
+}
+
+describe("page.tree depth and deepest-level markers", () => {
+  test("asks for 5 levels when --depth is absent and flags deepest pages that have children", async () => {
+    route("/api/v2/pages/123456/descendants", {
+      results: [
+        treeNode("1", 1, "123456"),
+        treeNode("4", 4, "1"),
+        treeNode("5a", 5, "4"),
+        treeNode("5b", 5, "4"),
+      ],
+    });
+    route("/api/v2/pages/5a/direct-children", { results: [{ id: "6" }] });
+    route("/api/v2/pages/5b/direct-children", { results: [] });
+    const result = await run(pageTree, { page: "123456" });
+    expect(calls[0]?.url.searchParams.get("depth")).toBe("5");
+    expect(itemsOf(result).map((item) => asRecord(item).hasChildren)).toEqual([
+      undefined,
+      undefined,
+      true,
+      undefined,
+    ]);
+    expect(probedPages()).toEqual(["5a", "5b"]);
+  });
+
+  test("--depth N marks pages at depth N, and only those are checked", async () => {
+    route("/api/v2/pages/123456/descendants", {
+      results: [treeNode("1", 1, "123456"), treeNode("2a", 2, "1"), treeNode("2b", 2, "1")],
+    });
+    route("/api/v2/pages/2a/direct-children", { results: [{ id: "3" }] });
+    route("/api/v2/pages/2b/direct-children", { results: [{ id: "4" }] });
+    const result = await run(pageTree, { page: "123456" }, { depth: 2 });
+    expect(calls[0]?.url.searchParams.get("depth")).toBe("2");
+    expect(itemsOf(result).map((item) => asRecord(item).hasChildren)).toEqual([
+      undefined,
+      true,
+      true,
+    ]);
+    expect(probedPages()).toEqual(["2a", "2b"]);
+  });
+});
+
+describe("bare ids and content-only links may be blog posts", () => {
+  test("a bare id that is not a page is read as a blog post", async () => {
+    route("/api/v2/blogposts/555", { ...PAGE, id: "555" });
+    const result = await run(pageGet, { page: "555" });
+    expect(calls.slice(0, 2).map((call) => call.url.pathname.split("/").at(-2))).toEqual([
+      "pages",
+      "blogposts",
+    ]);
+    expect(result).toMatchObject({ id: "555", type: "blogpost" });
+  });
+
+  test("viewer and tiny links carry only an id, so they probe too; page URLs and --type do not", async () => {
+    route("/api/v2/blogposts/555", { ...PAGE, id: "555" });
+    const viewer = await run(pageGet, {
+      page: "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=555",
+    });
+    expect(viewer).toMatchObject({ type: "blogpost" });
+    calls = [];
+    const pageUrl = await rejection(
+      run(pageGet, { page: "https://acme.atlassian.net/wiki/spaces/ENG/pages/555/T" }),
+    );
+    expect(pageUrl.status).toBe(404);
+    expect(calls).toHaveLength(1);
+    calls = [];
+    const typed = await rejection(run(pageGet, { page: "555" }, { type: "page" }));
+    expect(typed.status).toBe(404);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a bare id missing in both collections reports the page 404", async () => {
+    const error = await rejection(run(pageGet, { page: "999" }));
+    expect(error.status).toBe(404);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("versions, properties and comment list fall back to the blog post", async () => {
+    routeUsers();
+    route("/api/v2/blogposts/555/versions", { results: [{ number: 1, authorId: "acc-1" }] });
+    route("/api/v2/blogposts/555/properties", { results: [{ key: "k", value: 1 }] });
+    route("/api/v2/blogposts/555/footer-comments", { results: [FOOTER_COMMENT] });
+    expect(itemsOf(await run(pageVersions, { page: "555" }))).toHaveLength(1);
+    expect(itemsOf(await run(pageProperties, { page: "555" }))).toEqual([{ key: "k", value: 1 }]);
+    expect(itemsOf(await run(commentList, { page: "555" }))).toHaveLength(1);
+  });
+
+  test("comment list retries blog posts after the page collection answers 400", async () => {
+    route("/api/v2/pages/555/footer-comments", failure(400, "Invalid input"));
+    route("/api/v2/blogposts/555/footer-comments", { results: [FOOTER_COMMENT] });
+    routeUsers();
+    expect(itemsOf(await run(commentList, { page: "555" }))).toHaveLength(1);
+  });
+
+  test("ancestors of a blog post id is an error, never an empty success", async () => {
+    route("/rest/api/search", { results: [{ content: { id: "555", type: "blogpost" } }] });
+    const error = await rejection(run(pageAncestors, { page: "555" }));
+    expect(error.code).toBe("unsupported_for_blogpost");
+  });
+
+  test("diff of a blog post keeps --type blogpost in its next hint", async () => {
+    route("/api/v2/blogposts/555", { ...PAGE, id: "555", version: { number: 1 } });
+    const error = await rejection(run(pageDiff, { page: "555" }));
+    expect(error.code).toBe("no_previous_version");
+    expect(error.next).toEqual([["atl", "page", "versions", "555", "--type", "blogpost"]]);
+  });
+});
+
+describe("references: versions, legacy links and sites", () => {
+  test("a pageVersion link reads that version; an explicit --version wins", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    const link = "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456/T?pageVersion=20";
+    await run(pageGet, { page: link });
+    expect(calls[0]?.url.searchParams.get("version")).toBe("20");
+    calls = [];
+    await run(pageGet, { page: link }, { version: 3 });
+    expect(calls[0]?.url.searchParams.get("version")).toBe("3");
+  });
+
+  test("a /display/ link is resolved through the space's exact-title lookup", async () => {
+    route("/api/v2/spaces", { results: [{ id: "98765", key: "ENG" }] });
+    route("/api/v2/spaces/98765/pages", { results: [{ id: "123456", title: "My Title" }] });
+    route("/api/v2/pages/123456", PAGE);
+    const result = await run(pageGet, {
+      page: "https://acme.atlassian.net/wiki/display/ENG/My+Title",
+    });
+    const lookup = calls.find((call) => call.url.pathname.endsWith("/spaces/98765/pages"));
+    expect(lookup?.url.searchParams.get("title")).toBe("My Title");
+    expect(result).toMatchObject({ id: "123456" });
+  });
+
+  test("a /display/ title with no page is a not-found error with the lookup as next", async () => {
+    route("/api/v2/spaces", { results: [{ id: "98765", key: "ENG" }] });
+    route("/api/v2/spaces/98765/pages", { results: [] });
+    const error = await rejection(
+      run(pageGet, { page: "https://acme.atlassian.net/wiki/display/ENG/Nope" }),
+    );
+    expect(error.code).toBe("page_not_found");
+    expect(error.exitCode).toBe(2);
+    expect(error.next).toEqual([["atl", "space", "pages", "ENG", "--title", "Nope"]]);
+  });
+
+  test("an ARI of another site is not read on the default site", async () => {
+    route("/oauth/token/accessible-resources", [
+      {
+        id: "cloud-1",
+        url: "https://acme.atlassian.net",
+        name: "acme",
+        scopes: ["read:page:confluence"],
+      },
+    ]);
+    const error = await rejection(
+      run(pageGet, { page: "ari:cloud:confluence:00000000-0000-0000-0000-000000000000:page/1" }),
+    );
+    expect(error.code).toBe("site_not_accessible");
+    expect(calls.some((call) => call.url.pathname.includes("/api/v2/pages/"))).toBe(false);
+  });
+
+  test("an ARI of this site is read", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    await run(pageGet, { page: "ari:cloud:confluence:cloud-1:page/123456" });
+    expect(calls[0]?.url.pathname).toBe("/ex/confluence/cloud-1/wiki/api/v2/pages/123456");
+  });
+});
+
+describe("page.get --grep output bounds", () => {
+  test("a long single line shows excerpts around the hits, not the whole line", async () => {
+    const line = `${"x".repeat(2500)} needle ${"y".repeat(1500)} needle ${"z".repeat(1000)}`;
+    route("/api/v2/pages/123456", storagePage(line));
+    const result = asRecord(
+      await run(pageGet, { page: "123456" }, { grep: "needle", format: "storage" }),
+    );
+    const [range] = matchesOf(result);
+    expect(result.lines).toBe(1);
+    expect(range?.text.length).toBeGreaterThanOrEqual(2);
+    expect(range?.text.every((piece) => piece.length < 400)).toBe(true);
+    expect(range?.text.filter((piece) => piece.includes("needle"))).toHaveLength(2);
+  });
+
+  test("merged adjacent hits are split into ranges of a bounded number of lines", async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => `EUR ${i + 1}`).join("\n");
+    route("/api/v2/pages/123456", storagePage(rows));
+    const result = asRecord(
+      await run(pageGet, { page: "123456" }, { grep: "EUR", format: "storage" }),
+    );
+    const ranges = matchesOf(result);
+    expect(ranges).toHaveLength(5);
+    expect(ranges.every((range) => range.to - range.from + 1 <= 20)).toBe(true);
+    expect(ranges.flatMap((range) => range.hits)).toHaveLength(100);
+  });
+
+  test("a pattern hitting thousands of adjacent lines prints 20 ranges and counts the rest", async () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => `EUR ${i + 1}`).join("\n");
+    route("/api/v2/pages/123456", storagePage(rows));
+    const result = asRecord(
+      await run(pageGet, { page: "123456" }, { grep: "EUR", format: "storage" }),
+    );
+    expect(result.matches).toHaveLength(20);
+    expect(result.moreMatches).toBe(30);
+  });
+
+  test("a hit's own --context is never cut by the range size", async () => {
+    const rows = Array.from({ length: 200 }, (_, i) => (i === 100 ? "needle" : `row ${i}`));
+    route("/api/v2/pages/123456", storagePage(rows.join("\n")));
+    const result = asRecord(
+      await run(pageGet, { page: "123456" }, { grep: "needle", format: "storage", context: 40 }),
+    );
+    expect(result.matches).toEqual([{ from: 61, to: 141, hits: [101], text: rows.slice(60, 141) }]);
+  });
+
+  test("patterns match the text without markdown backslash escapes; the printed line is the original", async () => {
+    route("/api/v2/pages/123456", {
+      ...PAGE,
+      body: { atlas_doc_format: { value: adf("see C:\\Temp and *not italic* here") } },
+    });
+    for (const pattern of ["C:\\\\Temp", "\\*not italic\\*", "C:.Temp and .not"]) {
+      const result = asRecord(await run(pageGet, { page: "123456" }, { grep: pattern }));
+      expect(result.matches).toHaveLength(1);
+    }
+  });
+
+  test("no match keeps an empty matches list visible in compact output", async () => {
+    route("/api/v2/pages/123456", PAGE);
+    const result = await run(pageGet, { page: "123456" }, { grep: "absent" });
+    expect(asRecord(prune(result)).matches).toEqual([]);
+  });
+});
+
+describe("page.get --format storage body lines", () => {
+  test("storage XHTML is printed as lines within the line budget; --output gets the original", async () => {
+    const storage = `<p>${"word ".repeat(400)}</p>\n<p>end</p>`;
+    route("/api/v2/pages/123456", { ...PAGE, body: { storage: { value: storage } } });
+    const result = asRecord(await run(pageGet, { page: "123456" }, { format: "storage" }));
+    const lines = stringLines(result.body);
+    expect(lines.length).toBeGreaterThan(2);
+    expect(lines.every((line) => Buffer.byteLength(JSON.stringify(line)) <= 600)).toBe(true);
+    expect(sourceMarkdown(lines)).toBe(storage);
+  });
+});
+
+describe("page.get / diff with a version that does not exist", () => {
+  test("page get --version out of range points at page versions", async () => {
+    routeBy("/api/v2/pages/123456", (url) => (url.searchParams.has("version") ? undefined : PAGE));
+    const error = await rejection(run(pageGet, { page: "123456" }, { version: 999 }));
+    expect(error.status).toBe(404);
+    expect(error.hint).toContain("999");
+    expect(error.next).toEqual([["atl", "page", "versions", "123456"]]);
+  });
+
+  test("page diff --from out of range points at page versions", async () => {
+    routeBy("/api/v2/pages/123456", (url) =>
+      url.searchParams.get("version") === "50" ? undefined : { ...PAGE, version: { number: 4 } },
+    );
+    const error = await rejection(run(pageDiff, { page: "123456" }, { from: 50 }));
+    expect(error.next).toEqual([["atl", "page", "versions", "123456"]]);
+  });
+});
+
+describe("page.versions and page.diff titles", () => {
+  test("versions carry the title each version had", async () => {
+    routeUsers();
+    route("/api/v2/pages/123456/versions", {
+      results: [
+        { number: 2, authorId: "acc-1", page: { id: "123456", title: "Incident Contact Sheet" } },
+        { number: 1, authorId: "acc-1", page: { id: "123456", title: "Oncall Contacts (draft)" } },
+      ],
+    });
+    const result = await run(pageVersions, { page: "123456" });
+    expect(itemsOf(result).map((item) => asRecord(item).title)).toEqual([
+      "Incident Contact Sheet",
+      "Oncall Contacts (draft)",
+    ]);
+  });
+
+  test("a rename shows as {from, to}; an unchanged title does not", async () => {
+    const same = paragraphs("same");
+    routeBy("/api/v2/pages/123456", (url) => {
+      const number = Number(url.searchParams.get("version") ?? 3);
+      return {
+        ...PAGE,
+        title: number === 3 ? "New name" : "Old name",
+        version: { number },
+        body: { atlas_doc_format: { value: same } },
+      };
+    });
+    const renamed = asRecord(await run(pageDiff, { page: "123456" }));
+    expect(renamed).toMatchObject({
+      title: "New name",
+      renamed: { from: "Old name", to: "New name" },
+      added: 0,
+      removed: 0,
+    });
+    const unchanged = asRecord(await run(pageDiff, { page: "123456" }, { from: 3, to: 3 }));
+    expect(unchanged.renamed).toBeUndefined();
+  });
+});
+
+describe("comment reads without a kind", () => {
+  test("comment get tries inline when the id is not a footer comment", async () => {
+    routeUsers();
+    route("/api/v2/inline-comments/9100", INLINE_COMMENT);
+    const result = await run(commentGet, { comment: "9100" });
+    expect(calls[0]?.url.pathname).toEndWith("/footer-comments/9100");
+    expect(calls[1]?.url.pathname).toEndWith("/inline-comments/9100");
+    expect(result).toMatchObject({ id: "9100", type: "inline-comment", selection: "Hello" });
+  });
+
+  test("an explicit --kind is never retried; a miss in both reports the footer 404", async () => {
+    route("/api/v2/inline-comments/9100", INLINE_COMMENT);
+    const footer = await rejection(run(commentGet, { comment: "9100" }, { kind: "footer" }));
+    expect(footer.status).toBe(404);
+    expect(calls).toHaveLength(1);
+    calls = [];
+    const both = await rejection(run(commentGet, { comment: "1" }));
+    expect(both.status).toBe(404);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("replies and versions use the same kind lookup", async () => {
+    routeUsers();
+    route("/api/v2/inline-comments/9100/children", { results: [] });
+    route("/api/v2/inline-comments/9100/versions", { results: [{ number: 1, authorId: "acc-1" }] });
+    await run(commentReplies, { comment: "9100" });
+    expect(calls.at(-1)?.url.pathname).toEndWith("/inline-comments/9100/children");
+    expect(itemsOf(await run(commentVersions, { comment: "9100" }))).toHaveLength(1);
+  });
+
+  test("comment get --version reads that version of the comment", async () => {
+    routeUsers();
+    route("/api/v2/footer-comments/9001", FOOTER_COMMENT);
+    await run(commentGet, { comment: "9001" }, { version: 1 });
+    expect(calls[0]?.url.searchParams.get("version")).toBe("1");
+    expect(calls[0]?.url.searchParams.get("body-format")).toBe("atlas_doc_format");
+  });
+
+  test("a comment on a blog post is labelled blogPostId, not pageId", async () => {
+    routeUsers();
+    route("/api/v2/footer-comments/9005", {
+      ...FOOTER_COMMENT,
+      id: "9005",
+      pageId: undefined,
+      blogPostId: "555",
+    });
+    const result = asRecord(await run(commentGet, { comment: "9005" }));
+    expect(result.blogPostId).toBe("555");
+    expect(result.pageId).toBeUndefined();
+  });
+});
+
+describe("cql and space listings", () => {
+  test("expanded ancestors stay in the compact result as titles", async () => {
+    route("/rest/api/search", {
+      results: [
+        {
+          content: {
+            id: "1",
+            type: "page",
+            space: { key: "ENG" },
+            ancestors: [{ title: "Home" }, { title: "Docs" }],
+          },
+          title: "Page",
+        },
+      ],
+    });
+    const result = await run(cql, { query: "id = 1" }, { expand: "content.ancestors" });
+    expect(itemsOf(result)[0]).toMatchObject({ id: "1", ancestors: ["Home", "Docs"] });
+  });
+
+  test("a 400 on `title =` points at the exact-title lookup", async () => {
+    route("/rest/api/search", failure(400, "illegal request"));
+    const error = await rejection(run(cql, { query: 'title = "a \\"b\\""' }));
+    expect(error.status).toBe(400);
+    expect(error.hint).toContain("space pages");
+    const other = await rejection(run(cql, { query: 'text ~ "a \\"b\\""' }));
+    expect(other.hint ?? "").not.toContain("space pages");
+  });
+
+  test("space pages items always say their type, even when the API omits it", async () => {
+    route("/api/v2/spaces/98765/pages", { results: [{ id: "1", title: "A" }] });
+    route("/api/v2/spaces/98765/blogposts", { results: [{ id: "2", title: "B" }] });
+    expect(itemsOf(await run(spacePages, { space: "98765" }))).toEqual([
+      { id: "1", title: "A", type: "page" },
+    ]);
+    expect(itemsOf(await run(spacePages, { space: "98765" }, { type: "blogpost" }))).toEqual([
+      { id: "2", title: "B", type: "blogpost" },
+    ]);
+  });
+});
+
+describe("not-found is one category", () => {
+  test("attachment, personal-space and page lookups are api errors (exit 2)", async () => {
+    route("/rest/api/content/search", { results: [] });
+    const attachment = await rejection(run(attachmentGet, { attachment: "att1" }));
+    expect(attachment.category).toBe("api");
+    route("/rest/api/user", { accountId: "acc" });
+    const personal = await rejection(run(spacePersonal, { accountId: "acc" }));
+    expect(personal.exitCode).toBe(2);
+    route("/rest/api/search", { results: [] });
+    const ancestors = await rejection(run(pageAncestors, { page: "1" }));
+    expect(ancestors.exitCode).toBe(2);
   });
 });

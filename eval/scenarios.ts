@@ -16,13 +16,15 @@ export interface Scenario {
   id: string;
   name: string;
   write: boolean;
-  /** `target` is only set for the write scenario: the issue this run must comment on and move. */
+  /** `target` is only set for write scenarios: what this run must change (s8: the issue to comment on and move). */
   prompt(arm: Arm, target: string | undefined): string;
-  /** Judge the final assistant text; the write scenario also reads the issue back with atl. */
+  /** Write scenarios only: picks the run's target; without it the runner picks an unused Teendő issue (s8). */
+  pickTarget?: () => string;
+  /** Judge the final assistant text; write scenarios also read the target back with atl. */
   check(finalText: string, arm: Arm, target?: string): Check | Promise<Check>;
 }
 
-const HOST = "foldvarszki.atlassian.net";
+export const HOST = "foldvarszki.atlassian.net";
 export const WRITE_FROM = "Teendő";
 export const WRITE_TO = "Ellenőrzés alatt";
 
@@ -52,24 +54,37 @@ function counts(value: unknown): [string, number][] {
   });
 }
 
-function verdict(details: Record<string, boolean>): Check {
+export function verdict(details: Record<string, boolean>): Check {
   return {
     success: Object.values(details).every(Boolean),
     details: Object.entries(details).map(([label, ok]) => `${ok ? "ok" : "FAIL"} ${label}`),
   };
 }
 
-function escapeRegExp(text: string): string {
+export function escapeRegExp(text: string): string {
   return text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 /** `count` next to `label` in either order ("Teendő: 7", "7 in Teendő", "Teendő (7)", "| Teendő | 7 |"). */
-function countNear(text: string, label: string, count: number): boolean {
+export function countNear(text: string, label: string, count: number): boolean {
   const word = escapeRegExp(label);
   return new RegExp(
     `${word}[^\\n\\d]{0,24}\\b${count}\\b|\\b${count}\\b[^\\n\\d]{0,24}${word}`,
     "i",
   ).test(text);
+}
+
+/** Comments in an atl `{items}` list whose body contains `marker`; bodies are a string or a string[] of lines. */
+export function markerCount(stdout: string, marker: string): number {
+  const parsed: unknown = JSON.parse(stdout);
+  const items = isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items : [];
+  return items.filter((item) => {
+    if (!isRecord(item)) {
+      return false;
+    }
+    const body = Array.isArray(item.body) ? item.body.join("\n") : item.body;
+    return typeof body === "string" && body.includes(marker);
+  }).length;
 }
 
 /** Candidate write targets: top-level-ish tasks currently planned as Teendő, in manifest order. */
@@ -203,20 +218,9 @@ export function buildScenarios(manifest: Manifest): Scenario[] {
         }
         const marker = `atl smoke eval: budget confirmed (${arm})`;
         const issue = await atl("issue", "get", target);
-        const comments = await atl("issue", "comments", target, "--all");
         const issueJson: unknown = JSON.parse(issue.stdout);
-        const commentsJson: unknown = JSON.parse(comments.stdout);
         const status = isRecord(issueJson) ? issueJson.status : undefined;
-        const items =
-          isRecord(commentsJson) && Array.isArray(commentsJson.items) ? commentsJson.items : [];
-        // Bodies are a string, or a string[] of lines since compact markdown bodies became arrays.
-        const matching = items.filter((item) => {
-          if (!isRecord(item)) {
-            return false;
-          }
-          const body = Array.isArray(item.body) ? item.body.join("\n") : item.body;
-          return typeof body === "string" && body.includes(marker);
-        }).length;
+        const matching = markerCount((await atl("issue", "comments", target, "--all")).stdout, marker);
         return {
           ...verdict({ status: status === WRITE_TO, commentPresent: matching >= 1, commentOnce: matching === 1 }),
           details: [`read-back ${target}: status=${String(status)} matching comments=${matching}`],

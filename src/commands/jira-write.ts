@@ -1,10 +1,10 @@
 import { Type } from "../core/schema.ts";
 import { markdownToAdf } from "../adf/index.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
-import { AtlError, type NextCommand } from "../core/errors.ts";
+import { AtlError, inputError, type NextCommand } from "../core/errors.ts";
 import { isRecord } from "../core/guards.ts";
 import type { HttpClient } from "../core/http.ts";
-import { openSession, type Session } from "../core/session.ts";
+import { currentAccountId, openSession, type Session } from "../core/session.ts";
 import { parseJiraRef } from "../resolve/index.ts";
 import {
   compactComment,
@@ -13,22 +13,29 @@ import {
   ISSUE_ARG,
   issueSession,
   jiraDeps,
+  resolveIssueTypeId,
+  userName,
   type JiraComment,
   type JiraIssue,
   type Transition,
 } from "./jira.ts";
-import { ADF_FORMAT_FLAG, shortTs } from "./common.ts";
+import { ADF_FORMAT_FLAG, readJsonObject, shortTs } from "./common.ts";
 import {
   applyArgv,
+  applyArgvFor,
   BODY_FLAGS,
   COMMENT_FLAGS,
+  isPlan,
   jiraBody,
   loadBody,
   loadComment,
+  planOf,
   planOrSend,
   requireBody,
   type Plan,
   type PlannedRequest,
+  requireYes,
+  YES_FLAG,
 } from "./write.ts";
 
 // ---------------------------------------------------------------------------
@@ -62,44 +69,6 @@ const RICH_TEXT_FIELDS: ReadonlySet<string> = new Set(["description", "environme
 
 const ISSUE_ID = /^\d+$/;
 
-function inputError(code: string, message: string, hint?: string): AtlError {
-  return new AtlError(message, {
-    code,
-    category: "input",
-    ...(hint === undefined ? {} : { hint }),
-  });
-}
-
-function isPlan(value: unknown): value is Plan {
-  return isRecord(value) && value.type === "plan";
-}
-
-async function readJsonObject(path: string, flag: string): Promise<Record<string, unknown>> {
-  const text = await Bun.file(path)
-    .text()
-    .catch((cause: unknown) => {
-      throw new AtlError(`Cannot read ${flag} ${path}`, {
-        code: "input_file_unreadable",
-        category: "input",
-        cause,
-      });
-    });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (cause) {
-    throw new AtlError(`${flag} ${path} is not valid JSON`, {
-      code: "invalid_json_file",
-      category: "input",
-      cause,
-    });
-  }
-  if (!isRecord(parsed)) {
-    throw inputError("invalid_json_file", `${flag} ${path} must contain a JSON object`);
-  }
-  return parsed;
-}
-
 function tryParseJson(raw: string): { value: unknown } | undefined {
   try {
     return { value: JSON.parse(raw) };
@@ -108,12 +77,37 @@ function tryParseJson(raw: string): { value: unknown } | undefined {
   }
 }
 
+/** Jira account ids: 24 hex digits, or `<digits>:<uuid>`. */
+const ACCOUNT_ID = /^(?:[0-9a-f]{24}|\d+:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+
+/** `--set assignee=<string>`: an account id, `none` (unassign), or `auto` (project default). */
+function assigneeValue(raw: string): { accountId: string | null } {
+  const text = raw.trim();
+  if (text.toLowerCase() === "none") {
+    return { accountId: null };
+  }
+  if (text.toLowerCase() === "auto") {
+    return { accountId: "-1" };
+  }
+  if (!ACCOUNT_ID.test(text)) {
+    throw inputError(
+      "invalid_assignee",
+      `"${raw}" is not an account id; Jira would unassign the issue instead of failing`,
+      "Pass an account id (see `atl user find`), `none` to unassign, or `auto` for the project default.",
+    );
+  }
+  return { accountId: text };
+}
+
 /** One `--set field=value` value: JSON when it parses, else a string; summary is always text. */
 function fieldValue(name: string, raw: string): unknown {
   if (name === "summary") {
     return raw;
   }
   const parsed = tryParseJson(raw);
+  if (name === "assignee" && (parsed === undefined || typeof parsed.value === "string")) {
+    return assigneeValue(parsed === undefined ? raw : String(parsed.value));
+  }
   if (RICH_TEXT_FIELDS.has(name)) {
     if (parsed !== undefined && (parsed.value === null || isRecord(parsed.value))) {
       return parsed.value;
@@ -200,15 +194,22 @@ function projectRef(input: string): { key: string } | { id: string } {
   return ISSUE_ID.test(input) ? { id: input } : { key: input };
 }
 
+/** A later request of the same invocation, shown under a plan's `followUp`. */
+function followUpOf(request: PlannedRequest) {
+  const { method, url, body } = planOf(request, []);
+  return { method, url, body };
+}
+
 /** Send a write (or plan it); a 409 gains the read command as its `next`. */
 async function sendWrite<T>(
   ctx: CommandContext,
   http: HttpClient,
   request: PlannedRequest,
   read: NextCommand,
+  needsYes = false,
 ): Promise<T | Plan> {
   try {
-    return await planOrSend<T>(ctx, http, request, [applyArgv(ctx.argv)]);
+    return await planOrSend<T>(ctx, http, request, [applyArgvFor(ctx, needsYes)]);
   } catch (error) {
     if (error instanceof AtlError && error.status === 409) {
       throw new AtlError(error.message, {
@@ -224,51 +225,111 @@ async function sendWrite<T>(
   }
 }
 
-function describeTransition(t: Transition): string {
-  return `${t.name ?? t.id} (${t.id}${t.to?.name === undefined ? "" : ` -> ${t.to.name}`})`;
+/** Forces Jira to answer in English, whatever language the account uses. */
+const ENGLISH = { "Accept-Language": "en", "X-Force-Accept-Language": "true" } as const;
+
+/** The transitions an issue offers now, in the account's language or (with `english`) untranslated. */
+export async function fetchTransitions(
+  session: Session,
+  key: string,
+  english: boolean,
+): Promise<Transition[]> {
+  const page = await session.http.request<{ transitions?: Transition[] }>({
+    method: "GET",
+    url: session.jiraUrl(`/rest/api/3/issue/${key}/transitions`),
+    ...(english ? { headers: ENGLISH } : {}),
+  });
+  return page.transitions ?? [];
 }
 
-/** Match by id, then transition name, then target status name; all case-insensitive. */
+/** A transition with every name it answers to: localized and untranslated, for itself and its target status. */
+export interface TransitionNames {
+  id: string;
+  names: readonly string[];
+  statuses: readonly string[];
+}
+
+function present(values: readonly (string | undefined)[]): string[] {
+  return [
+    ...new Set(values.filter((value): value is string => value !== undefined && value !== "")),
+  ];
+}
+
+/** Pair each localized transition with its untranslated twin (same id). */
+export function transitionNames(
+  localized: readonly Transition[],
+  english: readonly Transition[],
+): (TransitionNames & { transition: Transition })[] {
+  return localized.map((transition) => {
+    const twin = english.find((candidate) => candidate.id === transition.id);
+    return {
+      transition,
+      id: transition.id,
+      names: present([transition.name, twin?.name]),
+      statuses: present([transition.to?.name, twin?.to?.name]),
+    };
+  });
+}
+
+/** Candidates matching by id, else by any transition name, else by any target status name (case-insensitive). */
+export function matchTransitions<T extends TransitionNames>(
+  candidates: readonly T[],
+  wanted: string,
+): T[] {
+  const text = wanted.trim().toLowerCase();
+  const same = (name: string): boolean => name.toLowerCase() === text;
+  const stages: readonly ((t: T) => boolean)[] = [
+    (t) => t.id === wanted.trim(),
+    (t) => t.names.some(same),
+    (t) => t.statuses.some(same),
+  ];
+  for (const test of stages) {
+    const hits = candidates.filter(test);
+    if (hits.length > 0) {
+      return hits;
+    }
+  }
+  return [];
+}
+
+export function describeTransition(t: TransitionNames): string {
+  const target = t.statuses.length === 0 ? "" : ` -> ${t.statuses.join(" / ")}`;
+  return `${t.names.join(" / ") || t.id} (${t.id}${target})`;
+}
+
+/** Match by id, then transition name, then target status name, in either language; all case-insensitive. */
 async function resolveTransition(
   session: Session,
   key: string,
   rawKey: string,
   wanted: string,
 ): Promise<Transition> {
-  const page = await session.http.request<{ transitions?: Transition[] }>({
-    method: "GET",
-    url: session.jiraUrl(`/rest/api/3/issue/${key}/transitions`),
-  });
-  const transitions = page.transitions ?? [];
-  const text = wanted.trim().toLowerCase();
-  const stages: readonly ((t: Transition) => boolean)[] = [
-    (t) => t.id === wanted.trim(),
-    (t) => (t.name ?? "").toLowerCase() === text,
-    (t) => (t.to?.name ?? "").toLowerCase() === text,
-  ];
-  for (const test of stages) {
-    const hits = transitions.filter(test);
-    if (hits.length === 1 && hits[0] !== undefined) {
-      return hits[0];
-    }
-    if (hits.length > 1) {
-      throw new AtlError(
-        `Transition "${wanted}" is ambiguous for ${rawKey}: ${hits.map(describeTransition).join(", ")}`,
-        {
-          code: "ambiguous_transition",
-          category: "input",
-          hint: "Pass a transition id.",
-          next: [["atl", "issue", "transitions", rawKey]],
-        },
-      );
-    }
+  const [localized, english] = await Promise.all([
+    fetchTransitions(session, key, false),
+    fetchTransitions(session, key, true),
+  ]);
+  const candidates = transitionNames(localized, english);
+  const hits = matchTransitions(candidates, wanted);
+  if (hits.length === 1 && hits[0] !== undefined) {
+    return hits[0].transition;
+  }
+  if (hits.length > 1) {
+    throw new AtlError(
+      `Transition "${wanted}" is ambiguous for ${rawKey}: ${hits.map(describeTransition).join(", ")}`,
+      {
+        code: "ambiguous_transition",
+        category: "input",
+        hint: "Pass a transition id.",
+        next: [["atl", "issue", "transitions", rawKey]],
+      },
+    );
   }
   throw new AtlError(
-    `Unknown transition "${wanted}" for ${rawKey}. Available: ${transitions.map(describeTransition).join(", ") || "none"}`,
+    `Unknown transition "${wanted}" for ${rawKey}. Available: ${candidates.map(describeTransition).join(", ") || "none"}`,
     {
       code: "unknown_transition",
       category: "input",
-      hint: "Pass a transition id, a transition name, or the target status name.",
+      hint: "Pass a transition id, a transition name, or the target status name (localized or English).",
       next: [["atl", "issue", "transitions", rawKey]],
     },
   );
@@ -276,57 +337,6 @@ async function resolveTransition(
 
 /** Jira duration: space-separated `<number><w|d|h|m>` tokens, e.g. `2h 30m`, `1.5h`. */
 const JIRA_DURATION = /^\d+(\.\d+)?[wdhm](\s+\d+(\.\d+)?[wdhm])*$/;
-
-interface IssueTypePage {
-  issueTypes?: { id: string; name?: string }[];
-  createMetaIssueType?: { id: string; name?: string }[];
-  isLast?: boolean;
-  total?: number;
-}
-
-/** Resolve `--type` (id or case-insensitive name) against the project's creatable issue types. */
-async function resolveIssueTypeId(
-  session: Session,
-  project: string,
-  wanted: string,
-): Promise<string> {
-  const types: { id: string; name?: string }[] = [];
-  for (let startAt = 0; ;) {
-    const page = await session.http.request<IssueTypePage>({
-      method: "GET",
-      url: session.jiraUrl(
-        `/rest/api/3/issue/createmeta/${encodeURIComponent(project)}/issuetypes`,
-      ),
-      query: { startAt, maxResults: 50 },
-    });
-    const items = page.issueTypes ?? page.createMetaIssueType ?? [];
-    types.push(...items);
-    startAt += items.length;
-    if (
-      items.length === 0 ||
-      page.isLast !== false ||
-      (page.total !== undefined && startAt >= page.total)
-    ) {
-      break;
-    }
-  }
-  const text = wanted.trim();
-  const match = ISSUE_ID.test(text)
-    ? types.find((t) => t.id === text)
-    : types.find((t) => (t.name ?? "").toLowerCase() === text.toLowerCase());
-  if (match === undefined) {
-    throw new AtlError(
-      `Unknown issue type "${wanted}" in project ${project}. Available: ${types.map((t) => t.name ?? t.id).join(", ") || "none"}`,
-      {
-        code: "unknown_issue_type",
-        category: "input",
-        hint: "Pass an issue type id or one of the listed names.",
-        next: [["atl", "project", "types", project]],
-      },
-    );
-  }
-  return match.id;
-}
 
 /** Normalize an ISO 8601 instant to Jira's `yyyy-MM-dd'T'HH:mm:ss.SSSZ` worklog format. */
 function jiraTimestamp(input: string): string {
@@ -375,7 +385,7 @@ const issueCreate = defineCommand({
     transition: Type.Optional(
       Type.String({
         description:
-          "Transition name, id, or target status to apply after creating; under --plan the follow-up appears as `followUp` (resolved only once the issue exists)",
+          "Transition name, id, or target status (localized or English) to apply after creating; under --plan the follow-up appears as `followUp` (resolved only once the issue exists)",
       }),
     ),
   }),
@@ -415,6 +425,7 @@ const issueCreate = defineCommand({
                 .jiraUrl("/rest/api/3/issue/KEY/transitions")
                 .replace("/KEY/", "/<new key>/"),
               transition: flags.transition,
+              note: "Resolved against the new issue's available transitions after it is created (localized or English names); a mismatch leaves the issue created and exits with unknown_transition.",
             },
           };
     }
@@ -530,7 +541,7 @@ const issueEdit = defineCommand({
 const issueComment = defineCommand({
   name: "issue.comment",
   summary: "Add a comment to an issue, or edit one with --edit",
-  mcpTools: ["addCommentToJiraIssue"],
+  mcpTools: ["addCommentToJiraIssue", "addOrEditJiraIssueComment"],
   args: [ISSUE_ARG],
   flags: Type.Object({
     ...BODY_FLAGS,
@@ -590,7 +601,7 @@ const issueMove = defineCommand({
     ISSUE_ARG,
     {
       name: "transition",
-      description: "Transition id or name, or target status name",
+      description: "Transition id or name, or target status name (localized or English)",
       required: true,
     },
   ],
@@ -622,16 +633,6 @@ const issueMove = defineCommand({
     const update =
       flags.updateFile === undefined ? {} : await readJsonObject(flags.updateFile, "--update-file");
     const comment = await loadComment(flags);
-    if (comment !== undefined) {
-      const existing = update.comment;
-      if (existing !== undefined && !Array.isArray(existing)) {
-        throw inputError(
-          "invalid_update",
-          "--update-file `comment` must be an array of operations",
-        );
-      }
-      update.comment = [...(existing ?? []), { add: { body: comment } }];
-    }
     const historyMetadata =
       flags.historyMetadataFile === undefined
         ? undefined
@@ -651,15 +652,52 @@ const issueMove = defineCommand({
       },
       ["atl", "issue", "get", rawKey],
     );
+    // The transition screen need not carry a comment field, which Jira ignores silently: post the
+    // comment through the comment API once the transition has succeeded.
+    const commentRequest: PlannedRequest | undefined =
+      comment === undefined
+        ? undefined
+        : {
+            method: "POST",
+            url: session.jiraUrl(`/rest/api/3/issue/${key}/comment`),
+            body: { body: comment },
+          };
     if (isPlan(sent)) {
-      return sent;
+      return commentRequest === undefined
+        ? sent
+        : { ...sent, followUp: followUpOf(commentRequest) };
     }
-    return {
+    const result: Record<string, unknown> = {
       key: rawKey,
       transition: { id: transition.id, name: transition.name },
       status: transition.to?.name,
-      next: [["atl", "issue", "get", rawKey]],
     };
+    if (commentRequest !== undefined) {
+      try {
+        const posted = await session.http.request<JiraComment>({
+          method: commentRequest.method,
+          url: commentRequest.url,
+          body: commentRequest.body,
+        });
+        result.comment = { id: posted.id };
+      } catch (error) {
+        if (!(error instanceof AtlError)) {
+          throw error;
+        }
+        throw new AtlError(
+          `Issue ${rawKey} was transitioned, but the comment was not posted: ${error.message}`,
+          {
+            code: error.code,
+            category: error.category,
+            ...(error.status === undefined ? {} : { status: error.status }),
+            hint: `Post it with \`atl issue comment ${rawKey} --body <text>\`.`,
+            next: [["atl", "issue", "get", rawKey]],
+            cause: error,
+          },
+        );
+      }
+    }
+    return { ...result, next: [["atl", "issue", "get", rawKey]] };
   },
 });
 
@@ -679,7 +717,7 @@ interface Worklog {
 const issueLog = defineCommand({
   name: "issue.log",
   summary: "Log work on an issue, or edit a worklog with --edit",
-  mcpTools: ["addWorklogToJiraIssue"],
+  mcpTools: ["addWorklogToJiraIssue", "addOrEditJiraIssueWorklog"],
   args: [
     ISSUE_ARG,
     {
@@ -751,7 +789,7 @@ const issueLog = defineCommand({
       issue: rawKey,
       timeSpent: worklog.timeSpent,
       started: shortTs(worklog.started),
-      author: worklog.author?.displayName ?? worklog.author?.accountId,
+      author: userName(worklog.author),
     };
   },
 });
@@ -770,7 +808,7 @@ interface IssueLinkType {
 const issueLink = defineCommand({
   name: "issue.link",
   summary: 'Link two issues: `atl issue link A blocks B` means "A blocks B"',
-  mcpTools: ["createIssueLink"],
+  mcpTools: ["createIssueLink", "createJiraIssueLink"],
   args: [
     {
       name: "from",
@@ -883,6 +921,545 @@ const issueLink = defineCommand({
   },
 });
 
+// ---------------------------------------------------------------------------
+// issue.delete / issue.comment-delete
+// ---------------------------------------------------------------------------
+
+const issueDelete = defineCommand({
+  name: "issue.delete",
+  summary: "Delete an issue (irreversible; needs --yes)",
+  mcpTools: ["deleteJiraIssue"],
+  args: [ISSUE_ARG],
+  flags: Type.Object({
+    deleteSubtasks: Type.Optional(
+      Type.Boolean({ description: "Also delete the issue's subtasks (Jira refuses otherwise)" }),
+    ),
+    yes: YES_FLAG,
+  }),
+  sideEffects: "write",
+  examples: ["atl issue delete ABC-123 --plan", "atl issue delete ABC-123 --delete-subtasks --yes"],
+  async run(ctx, input) {
+    const { flags } = input;
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    requireYes(ctx, flags.yes, `DELETE issue ${rawKey}`);
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      {
+        method: "DELETE",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}`),
+        ...(flags.deleteSubtasks === true ? { query: { deleteSubtasks: true } } : {}),
+      },
+      ["atl", "issue", "get", rawKey],
+      true,
+    );
+    if (isPlan(sent)) {
+      return sent;
+    }
+    return { deleted: rawKey, ...(flags.deleteSubtasks === true ? { subtasks: "deleted" } : {}) };
+  },
+});
+
+const issueCommentDelete = defineCommand({
+  name: "issue.comment-delete",
+  summary: "Delete a comment from an issue (irreversible; needs --yes)",
+  mcpTools: ["deleteJiraComment"],
+  args: [
+    ISSUE_ARG,
+    { name: "commentId", description: "Comment id (see `atl issue comments`)", required: true },
+  ],
+  flags: Type.Object({ yes: YES_FLAG }),
+  sideEffects: "write",
+  examples: [
+    "atl issue comment-delete ABC-123 10050 --plan",
+    "atl issue comment-delete ABC-123 10050 --yes",
+  ],
+  async run(ctx, input) {
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    const commentId = input.args.commentId ?? "";
+    requireYes(ctx, input.flags.yes, `DELETE comment ${commentId} on ${rawKey}`);
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      {
+        method: "DELETE",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/comment/${encodeURIComponent(commentId)}`),
+      },
+      ["atl", "issue", "comments", rawKey],
+      true,
+    );
+    return isPlan(sent) ? sent : { deleted: commentId, issue: rawKey };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// issue.remote-link.add
+// ---------------------------------------------------------------------------
+
+const issueRemoteLinkAdd = defineCommand({
+  name: "issue.remote-link.add",
+  summary: "Add a web link (external URL or Confluence page) to an issue's Web links",
+  mcpTools: ["createJiraIssueRemoteIssueLink"],
+  args: [ISSUE_ARG],
+  flags: Type.Object({
+    url: Type.String({ description: "Link target URL (http/https)" }),
+    title: Type.String({ description: "Link text" }),
+    summary: Type.Optional(
+      Type.String({ description: "Longer description shown under the title" }),
+    ),
+    relationship: Type.Optional(
+      Type.String({ description: 'Relationship label, e.g. "mentioned in" or "causes"' }),
+    ),
+    globalId: Type.Optional(
+      Type.String({
+        description: "Stable id for the link; re-posting the same globalId updates that link",
+      }),
+    ),
+    iconUrl: Type.Optional(Type.String({ description: "16x16 icon URL shown beside the link" })),
+  }),
+  sideEffects: "write",
+  examples: [
+    'atl issue remote-link add ABC-123 --url https://example.com/runbook --title "Runbook"',
+    'atl issue remote-link add ABC-123 --url https://acme.atlassian.net/wiki/spaces/X/pages/1 --title "Design" --relationship "documented in"',
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    const created = await sendWrite<{ id?: number | string; self?: string }>(
+      ctx,
+      session.http,
+      {
+        method: "POST",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/remotelink`),
+        body: {
+          ...(flags.globalId === undefined ? {} : { globalId: flags.globalId }),
+          ...(flags.relationship === undefined ? {} : { relationship: flags.relationship }),
+          object: {
+            url: flags.url,
+            title: flags.title,
+            ...(flags.summary === undefined ? {} : { summary: flags.summary }),
+            ...(flags.iconUrl === undefined ? {} : { icon: { url16x16: flags.iconUrl } }),
+          },
+        },
+      },
+      ["atl", "issue", "links", rawKey, "--remote"],
+    );
+    if (isPlan(created) || ctx.full) {
+      return created;
+    }
+    return {
+      id: created.id === undefined ? undefined : String(created.id),
+      issue: rawKey,
+      next: [["atl", "issue", "links", rawKey, "--remote"]],
+    };
+  },
+});
+
+const issueRemoteLinkDelete = defineCommand({
+  name: "issue.remote-link.delete",
+  summary: "Delete a web link from an issue, by link id or --global-id (irreversible; needs --yes)",
+  args: [
+    ISSUE_ARG,
+    {
+      name: "linkId",
+      description: "Web link id (see `atl issue links <issue> --remote`); or use --global-id",
+    },
+  ],
+  flags: Type.Object({
+    globalId: Type.Optional(
+      Type.String({ description: "Delete the link with this globalId instead of a link id" }),
+    ),
+    yes: YES_FLAG,
+  }),
+  sideEffects: "write",
+  examples: [
+    "atl issue remote-link delete ABC-123 10014 --plan",
+    "atl issue remote-link delete ABC-123 10014 --yes",
+    "atl issue remote-link delete ABC-123 --global-id runbook-1 --yes",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const linkId = input.args.linkId;
+    if ((linkId === undefined) === (flags.globalId === undefined)) {
+      throw inputError(
+        "invalid_selection",
+        "Pass either a link id or --global-id, not both and not neither",
+        "List the links with `atl issue links <issue> --remote`.",
+      );
+    }
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    requireYes(
+      ctx,
+      flags.yes,
+      `DELETE web link ${linkId ?? `with globalId ${flags.globalId ?? ""}`} on ${rawKey}`,
+    );
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      linkId === undefined
+        ? {
+            method: "DELETE",
+            url: session.jiraUrl(`/rest/api/3/issue/${key}/remotelink`),
+            query: { globalId: flags.globalId ?? "" },
+          }
+        : {
+            method: "DELETE",
+            url: session.jiraUrl(
+              `/rest/api/3/issue/${key}/remotelink/${encodeURIComponent(linkId)}`,
+            ),
+          },
+      ["atl", "issue", "links", rawKey, "--remote"],
+      true,
+    );
+    if (isPlan(sent)) {
+      return sent;
+    }
+    return {
+      deleted: linkId ?? flags.globalId,
+      issue: rawKey,
+      next: [["atl", "issue", "links", rawKey, "--remote"]],
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// property.set
+// ---------------------------------------------------------------------------
+
+const PROPERTY_ENTITIES = ["issue", "comment", "worklog", "dashboard-item"] as const;
+
+function isPropertyEntity(value: string): value is (typeof PROPERTY_ENTITIES)[number] {
+  return PROPERTY_ENTITIES.some((entity) => entity === value);
+}
+
+const propertySet = defineCommand({
+  name: "property.set",
+  summary: "Create or overwrite an entity property (issue, comment, worklog, dashboard-item)",
+  mcpTools: ["editJiraEntityProperty"],
+  args: [
+    {
+      name: "entity",
+      description: `One of ${PROPERTY_ENTITIES.join(", ")}`,
+      required: true,
+    },
+    {
+      name: "id",
+      description: "Issue key/id, comment id, worklog id, or dashboard id",
+      required: true,
+    },
+    { name: "key", description: "Property key (at most 255 characters)", required: true },
+  ],
+  flags: Type.Object({
+    value: Type.Optional(
+      Type.String({ description: "Property value as JSON (strings need quotes)" }),
+    ),
+    file: Type.Optional(Type.String({ description: "File containing the JSON value" })),
+    issue: Type.Optional(Type.String({ description: "Issue key or id (entity worklog only)" })),
+    item: Type.Optional(
+      Type.String({ description: "Dashboard item id (entity dashboard-item only)" }),
+    ),
+  }),
+  sideEffects: "write",
+  examples: [
+    'atl property set issue ABC-123 team.meta --value \'{"owner":"web"}\'',
+    "atl property set comment 10050 review.state --file state.json --plan",
+    "atl property set worklog 10042 audit --issue ABC-123 --value '\"checked\"'",
+    "atl property set dashboard-item 10001 cfg --item 10002 --value 3",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const entity = input.args.entity ?? "";
+    const id = input.args.id ?? "";
+    const propertyKey = encodeURIComponent(input.args.key ?? "");
+    if (!isPropertyEntity(entity)) {
+      throw inputError(
+        "invalid_property_entity",
+        `Unknown entity "${entity}"`,
+        `Use one of ${PROPERTY_ENTITIES.join(", ")}. User and project property writes need scopes this login does not have.`,
+      );
+    }
+    if ((flags.value === undefined) === (flags.file === undefined)) {
+      throw inputError("property_value_required", "Pass exactly one of --value or --file");
+    }
+    const raw =
+      flags.value ??
+      (await Bun.file(flags.file ?? "")
+        .text()
+        .catch((cause: unknown) => {
+          throw new AtlError(`Cannot read --file ${flags.file}`, {
+            code: "input_file_unreadable",
+            category: "input",
+            cause,
+          });
+        }));
+    const parsed = tryParseJson(raw);
+    if (parsed === undefined) {
+      throw inputError(
+        "invalid_property_value",
+        "The property value is not valid JSON",
+        "Quote strings: --value '\"text\"'.",
+      );
+    }
+    if (entity === "worklog" && flags.issue === undefined) {
+      throw inputError("missing_issue", "Entity worklog needs --issue <key>");
+    }
+    if (entity === "dashboard-item" && flags.item === undefined) {
+      throw inputError("missing_item", "Entity dashboard-item needs --item <itemId>");
+    }
+
+    const issue = entity === "issue" ? await issueSession(ctx, id) : undefined;
+    const session = issue?.session ?? (await openSession(ctx, { fetch: jiraDeps.fetch }));
+    const encodedId = issue?.key ?? encodeURIComponent(id);
+    const paths: Record<(typeof PROPERTY_ENTITIES)[number], string> = {
+      issue: `/rest/api/3/issue/${encodedId}/properties/${propertyKey}`,
+      comment: `/rest/api/3/comment/${encodedId}/properties/${propertyKey}`,
+      worklog: `/rest/api/3/issue/${encodeURIComponent(flags.issue ?? "")}/worklog/${encodedId}/properties/${propertyKey}`,
+      "dashboard-item": `/rest/api/3/dashboard/${encodedId}/items/${encodeURIComponent(flags.item ?? "")}/properties/${propertyKey}`,
+    };
+    const sent = await planOrSend<undefined>(
+      ctx,
+      session.http,
+      { method: "PUT", url: session.jiraUrl(paths[entity]), body: parsed.value },
+      [applyArgv(ctx.argv)],
+    );
+    if (isPlan(sent)) {
+      return sent;
+    }
+    return {
+      entity,
+      id,
+      key: input.args.key,
+      next: [
+        [
+          "atl",
+          "property",
+          "get",
+          entity,
+          id,
+          input.args.key ?? "",
+          ...(flags.issue === undefined ? [] : ["--issue", flags.issue]),
+          ...(flags.item === undefined ? [] : ["--item", flags.item]),
+        ],
+      ],
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// version.related-work.set
+// ---------------------------------------------------------------------------
+
+interface RelatedWork {
+  relatedWorkId?: string;
+  category?: string;
+  title?: string;
+  url?: string;
+  issueId?: number;
+}
+
+const versionRelatedWorkSet = defineCommand({
+  name: "version.related-work.set",
+  summary: "Add a related-work link to a project version, or update one with --id",
+  mcpTools: ["manageJiraProjectVersionRelatedWork"],
+  args: [{ name: "version", description: "Version id", required: true }],
+  flags: Type.Object({
+    category: Type.String({ description: 'Related-work category, e.g. "Design docs" or "Other"' }),
+    title: Type.Optional(Type.String({ description: "Link title" })),
+    url: Type.Optional(Type.String({ description: "Link URL" })),
+    id: Type.Optional(
+      Type.String({ description: "relatedWorkId of the link to update (omit to create)" }),
+    ),
+  }),
+  sideEffects: "write",
+  examples: [
+    'atl version related-work set 10000 --category "Design docs" --title Spec --url https://example.com/spec',
+    'atl version related-work set 10000 --id 6f2c... --category Other --title "New title" --url https://example.com',
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const version = input.args.version ?? "";
+    const session = await openSession(ctx, { fetch: jiraDeps.fetch });
+    const related = await sendWrite<RelatedWork>(
+      ctx,
+      session.http,
+      {
+        method: flags.id === undefined ? "POST" : "PUT",
+        url: session.jiraUrl(`/rest/api/3/version/${encodeURIComponent(version)}/relatedwork`),
+        body: {
+          category: flags.category,
+          ...(flags.id === undefined ? {} : { relatedWorkId: flags.id }),
+          ...(flags.title === undefined ? {} : { title: flags.title }),
+          ...(flags.url === undefined ? {} : { url: flags.url }),
+        },
+      },
+      ["atl", "version", "related-work", "list", version],
+    );
+    if (isPlan(related) || ctx.full) {
+      return related;
+    }
+    return {
+      id: related.relatedWorkId,
+      category: related.category,
+      title: related.title,
+      url: related.url,
+      next: [["atl", "version", "related-work", "list", version]],
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// issue.watch / issue.unwatch
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_FLAG = {
+  account: Type.Optional(
+    Type.String({ description: "Account id to (un)watch as (default: the current user)" }),
+  ),
+};
+
+const issueWatch = defineCommand({
+  name: "issue.watch",
+  summary: "Watch an issue (you, or --account)",
+  mcpTools: ["watchJiraIssue"],
+  args: [ISSUE_ARG],
+  flags: Type.Object({ ...ACCOUNT_FLAG }),
+  sideEffects: "write",
+  examples: [
+    "atl issue watch ABC-123",
+    "atl issue watch ABC-123 --account 5b10ac8d82e05b22cc7d4ef5",
+  ],
+  async run(ctx, input) {
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      {
+        method: "POST",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/watchers`),
+        // The API takes the account id as a bare JSON string and defaults to the caller without one.
+        ...(input.flags.account === undefined ? {} : { body: input.flags.account }),
+      },
+      ["atl", "issue", "get", rawKey],
+    );
+    return isPlan(sent)
+      ? sent
+      : {
+          issue: rawKey,
+          watching: true,
+          ...(input.flags.account === undefined ? {} : { account: input.flags.account }),
+        };
+  },
+});
+
+const issueUnwatch = defineCommand({
+  name: "issue.unwatch",
+  summary: "Stop watching an issue (you, or --account)",
+  args: [ISSUE_ARG],
+  flags: Type.Object({ ...ACCOUNT_FLAG }),
+  sideEffects: "write",
+  examples: [
+    "atl issue unwatch ABC-123",
+    "atl issue unwatch ABC-123 --account 5b10ac8d82e05b22cc7d4ef5",
+  ],
+  async run(ctx, input) {
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    // DELETE has no "caller" default: accountId is required.
+    const accountId =
+      input.flags.account ?? (await currentAccountId(session, "Pass --account <accountId>."));
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      {
+        method: "DELETE",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/watchers`),
+        query: { accountId },
+      },
+      ["atl", "issue", "get", rawKey],
+    );
+    return isPlan(sent) ? sent : { issue: rawKey, watching: false };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// issue.notify
+// ---------------------------------------------------------------------------
+
+/** `--to` tokens: reporter, assignee, watchers, voters, `user:<accountId>`, `group:<name>`. */
+function notifyRecipients(tokens: readonly string[]): Record<string, unknown> {
+  const to: Record<string, unknown> = {};
+  const users: { accountId: string }[] = [];
+  const groups: { name: string }[] = [];
+  for (const token of tokens) {
+    if (
+      token === "reporter" ||
+      token === "assignee" ||
+      token === "watchers" ||
+      token === "voters"
+    ) {
+      to[token] = true;
+    } else if (token.startsWith("user:") && token.length > "user:".length) {
+      users.push({ accountId: token.slice("user:".length) });
+    } else if (token.startsWith("group:") && token.length > "group:".length) {
+      groups.push({ name: token.slice("group:".length) });
+    } else {
+      throw inputError(
+        "invalid_recipient",
+        `Unknown --to value "${token}"`,
+        "Use reporter, assignee, watchers, voters, user:<accountId>, or group:<name>.",
+      );
+    }
+  }
+  return {
+    ...to,
+    ...(users.length === 0 ? {} : { users }),
+    ...(groups.length === 0 ? {} : { groups }),
+  };
+}
+
+const issueNotify = defineCommand({
+  name: "issue.notify",
+  summary: "Email a notification about an issue to chosen recipients",
+  args: [ISSUE_ARG],
+  flags: Type.Object({
+    subject: Type.String({ description: "Email subject" }),
+    body: Type.String({ description: "Plain-text email body" }),
+    htmlBody: Type.Optional(Type.String({ description: "HTML email body (optional)" })),
+    to: Type.Array(Type.String(), {
+      description:
+        "Recipient: reporter, assignee, watchers, voters, user:<accountId>, group:<name>. Repeatable",
+    }),
+  }),
+  sideEffects: "write",
+  examples: [
+    'atl issue notify ABC-123 --subject "Deploy done" --body "Shipped" --to watchers --to assignee',
+    'atl issue notify ABC-123 --subject Heads-up --body "See notes" --to user:5b10ac8d82e05b22cc7d4ef5 --plan',
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    if (flags.to.length === 0) {
+      throw inputError("recipients_required", "Pass at least one --to recipient");
+    }
+    const to = notifyRecipients(flags.to);
+    const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
+    const sent = await sendWrite<undefined>(
+      ctx,
+      session.http,
+      {
+        method: "POST",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/notify`),
+        body: {
+          subject: flags.subject,
+          textBody: flags.body,
+          ...(flags.htmlBody === undefined ? {} : { htmlBody: flags.htmlBody }),
+          to,
+        },
+      },
+      ["atl", "issue", "get", rawKey],
+    );
+    return isPlan(sent) ? sent : { notified: rawKey, to: flags.to };
+  },
+});
+
 export const jiraWriteCommands: readonly CommandSpec[] = [
   issueCreate,
   issueEdit,
@@ -890,4 +1467,13 @@ export const jiraWriteCommands: readonly CommandSpec[] = [
   issueMove,
   issueLog,
   issueLink,
+  issueDelete,
+  issueCommentDelete,
+  issueRemoteLinkAdd,
+  issueRemoteLinkDelete,
+  propertySet,
+  versionRelatedWorkSet,
+  issueWatch,
+  issueUnwatch,
+  issueNotify,
 ];

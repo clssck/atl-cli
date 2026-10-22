@@ -9,6 +9,7 @@ import { AtlError } from "../../src/core/errors.ts";
 import { isRecord } from "../../src/core/guards.ts";
 import { prune } from "../../src/core/output.ts";
 import { makeContext } from "../helpers/context.ts";
+import { withDiagnostics } from "../helpers/stderr.ts";
 
 const CLOUD = "11111111-2222-3333-4444-555555555555";
 const CONFLUENCE_SEARCH = `/ex/confluence/${CLOUD}/wiki/rest/api/search`;
@@ -62,9 +63,10 @@ async function run(
   args: Record<string, string>,
   flags: Record<string, unknown> = {},
   overrides: Partial<CommandContext> = {},
+  rest: string[] = [],
 ): Promise<unknown> {
   const context = { ...ctx, ...overrides };
-  const result = await command(name).run(context, { args, rest: [], flags });
+  const result = await command(name).run(context, { args, rest, flags });
   return context.full ? result : prune(result);
 }
 
@@ -214,6 +216,13 @@ describe("user.find", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+/** Run `search` and return its stdout value plus the JSONL diagnostics it wrote to stderr. */
+async function searchWithStderr(
+  flags: Record<string, unknown>,
+): Promise<{ result: unknown; diagnostics: unknown[] }> {
+  return withDiagnostics(() => run("search", { query: "ghost" }, flags));
+}
 
 describe("search", () => {
   test("searches both products with text queries and compacts hits, interleaved", async () => {
@@ -375,5 +384,159 @@ describe("search", () => {
       "invalid_cursor",
     );
     expect(calls).toHaveLength(0);
+  });
+
+  describe("empty results", () => {
+    test("zero items hint title and summary queries, which differ from the text query that ran", async () => {
+      respond({
+        [CONFLUENCE_SEARCH]: { results: [] },
+        [JIRA_SEARCH]: { issues: [], isLast: true },
+      });
+      const { result, diagnostics } = await searchWithStderr({});
+      expect(itemsOf(result)).toEqual([]);
+      expect(diagnostics).toEqual([
+        {
+          type: "hint",
+          code: "empty_search",
+          hint: expect.stringContaining("alternate terms"),
+          next: [
+            ["atl", "cql", 'title ~ "ghost"'],
+            ["atl", "jql", 'summary ~ "ghost"'],
+          ],
+        },
+      ]);
+      for (const call of calls) {
+        for (const suggested of ['title ~ "ghost"', 'summary ~ "ghost"']) {
+          expect([call.query.get("cql"), call.query.get("jql")]).not.toContain(suggested);
+        }
+      }
+    });
+
+    test("the hint follows --product and --type", async () => {
+      respond({
+        [CONFLUENCE_SEARCH]: { results: [] },
+        [JIRA_SEARCH]: { issues: [], isLast: true },
+      });
+      const confluence = await searchWithStderr({ product: "confluence", type: "page" });
+      expect(recordOf(confluence.diagnostics[0]).next).toEqual([
+        ["atl", "cql", 'title ~ "ghost" AND type = page'],
+      ]);
+      const jira = await searchWithStderr({ product: "jira" });
+      expect(recordOf(jira.diagnostics[0]).next).toEqual([["atl", "jql", 'summary ~ "ghost"']]);
+    });
+
+    test("an empty Confluence answer is retried once before the search reports no hits", async () => {
+      let attempts = 0;
+      respond({
+        [CONFLUENCE_SEARCH]: () => {
+          attempts += 1;
+          return attempts === 1 ? { results: [] } : { results: [pageHit("1", "Alpha")] };
+        },
+      });
+      const { result, diagnostics } = await searchWithStderr({ product: "confluence" });
+      expect(attempts).toBe(2);
+      expect(itemsOf(result)).toHaveLength(1);
+      expect(diagnostics).toEqual([]);
+    });
+
+    test("results, or an empty continuation page, write no hint", async () => {
+      respond({
+        [CONFLUENCE_SEARCH]: (query: URLSearchParams) =>
+          query.has("cursor")
+            ? { results: [] }
+            : { results: [pageHit("1", "Alpha")], _links: { next: "/x?cursor=C2" } },
+      });
+      const first = await searchWithStderr({ product: "confluence", limit: 1 });
+      expect(itemsOf(first.result)).toHaveLength(1);
+      expect(first.diagnostics).toEqual([]);
+      const cursor = recordOf(first.result).nextCursor;
+      const next = await searchWithStderr({ product: "confluence", limit: 1, cursor });
+      expect(itemsOf(next.result)).toEqual([]);
+      expect(next.diagnostics).toEqual([]);
+    });
+  });
+
+  test("Confluence hits carry spaceKey and the parent page title", async () => {
+    respond({
+      [CONFLUENCE_SEARCH]: {
+        results: [
+          {
+            content: {
+              id: "7",
+              type: "page",
+              ancestors: [{ title: "Root" }, { title: "Runbooks" }],
+            },
+            resultGlobalContainer: { title: "Engineering", displayUrl: "/spaces/ENG" },
+            title: "Restart Procedure",
+            url: "/spaces/ENG/pages/7/x",
+          },
+        ],
+      },
+    });
+    const items = itemsOf(await run("search", { query: "restart" }, { product: "confluence" }));
+    expect(items).toEqual([
+      { id: "7", type: "page", title: "Restart Procedure", spaceKey: "ENG", parent: "Runbooks" },
+    ]);
+    expect(calls[0]?.query.get("expand")).toBe("content.ancestors");
+  });
+
+  test("upper-case AND/OR/NOT and a leading dash in the text are literal in CQL and JQL", async () => {
+    respond({
+      [CONFLUENCE_SEARCH]: { results: [pageHit("1", "A")] },
+      [JIRA_SEARCH]: { issues: [issueHit("10", "ABC-1")], isLast: true },
+    });
+    await run("search", { query: "NOT ANDROID AND OR -draft a-b BRAND" });
+    const literal = 'text ~ "not ANDROID and or \\\\-draft a-b BRAND"';
+    expect(calls.find((call) => call.path === CONFLUENCE_SEARCH)?.query.get("cql")).toBe(literal);
+    expect(calls.find((call) => call.path === JIRA_SEARCH)?.query.get("jql")).toBe(literal);
+  });
+});
+
+describe("user.get", () => {
+  const BULK = `/ex/confluence/${CLOUD}/wiki/rest/api/user/bulk`;
+  const ADA = {
+    type: "known",
+    accountId: "acc-1",
+    accountType: "atlassian",
+    accountStatus: "active",
+    displayName: "Ada",
+    email: "ada@example.com",
+    locale: "en_US",
+    profilePicture: { path: "/x" },
+  };
+
+  test("looks up every id in one bulk call and reports unknown ids", async () => {
+    respond({ [BULK]: { results: [ADA] } });
+    const result = await run("user.get", {}, {}, {}, ["acc-1", "acc-1", "gone"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.query.getAll("accountId")).toEqual(["acc-1", "gone"]);
+    expect(result).toEqual({
+      items: [{ accountId: "acc-1", name: "Ada", email: "ada@example.com", locale: "en_US" }],
+      missing: ["gone"],
+    });
+  });
+
+  test("shows account type and status only when unusual", async () => {
+    respond({
+      [BULK]: {
+        results: [
+          { accountId: "app-1", accountType: "app", accountStatus: "inactive", displayName: "Bot" },
+        ],
+      },
+    });
+    expect(await run("user.get", {}, {}, {}, ["app-1"])).toEqual({
+      items: [{ accountId: "app-1", name: "Bot", type: "app", status: "inactive" }],
+    });
+  });
+
+  test("splits more than 200 ids across requests; --full is raw", async () => {
+    respond({ [BULK]: { results: [ADA] } });
+    const ids = Array.from({ length: 201 }, (_, i) => `acc-${i}`);
+    await run("user.get", {}, {}, {}, ids);
+    expect(calls.map((c) => c.query.getAll("accountId").length)).toEqual([200, 1]);
+
+    respond({ [BULK]: { results: [ADA] } });
+    const full = await run("user.get", {}, {}, { full: true }, ["acc-1"]);
+    expect(recordOf(full).items).toEqual([ADA]);
   });
 });

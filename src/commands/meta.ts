@@ -8,7 +8,7 @@ import {
   type CommandSpec,
 } from "../core/cli.ts";
 import { AtlError } from "../core/errors.ts";
-import { parseFieldList } from "../core/output.ts";
+import { splitList } from "../core/output.ts";
 
 export const metaGroups: Readonly<Record<string, string>> = {
   commands: "Discover registered commands",
@@ -124,7 +124,7 @@ export const commandsRun = defineCommand({
 
     let selected = registry;
     if (flags.fields !== undefined) {
-      const wanted = parseFieldList(flags.fields);
+      const wanted = splitList(flags.fields);
       const known = registry.map((spec) => spec.name);
       for (const name of wanted) {
         if (known.includes(name)) {

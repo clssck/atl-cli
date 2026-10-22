@@ -9,8 +9,8 @@
 | `src/main.ts` | entry: imports `src/commands/index.ts`, runs `runCli` |
 | `src/commands/index.ts` | the only place commands and groups are registered |
 | `src/commands/*.ts` | one module per product area; exports `<area>Commands` and `<area>Groups` |
-| `src/commands/write.ts` | write plumbing: `planOrSend`, `planOf`, `applyArgv`, `BODY_FLAGS`, `COMMENT_FLAGS`, `loadBody`, `requireBody`, `loadComment` |
-| `src/commands/common.ts` | read plumbing: paging flags, `--format`, ADF rendering |
+| `src/commands/write.ts` | write plumbing: `planOrSend`, `planOf`, `isPlan`, `applyArgv`, `applyArgvFor`, `requireYes`, `BODY_FLAGS`, `COMMENT_FLAGS`, `loadBody`, `requireBody`, `loadComment` |
+| `src/commands/common.ts` | read plumbing: paging flags, `--format`, ADF rendering, `shortTs`, `queryLiteral` (CQL/JQL strings), `readJsonObject` |
 | `src/core/` | CLI runtime, flag schemas (`schema.ts`) and validation (`validate.ts`), HTTP and GraphQL (`graphql.ts`) clients, pagination, config, session/site resolution, errors |
 | `src/auth/` | OAuth: discovery, DCR, PKCE, loopback, token store, locked refresh |
 | `src/mcp/` | Streamable HTTP JSON-RPC client, used only by `atl mcp tools` and `atl mcp call` |
@@ -39,6 +39,10 @@ Never commit a red `bun run check`.
 2. **Command changes.**
    - Define with `defineCommand` in the area module, export it in `<area>Commands`, register only via `src/commands/index.ts`.
    - Set `mcpTools` when the command replaces an MCP tool. `test/parity.test.ts` fails if any tool in `mcp/tools-v1.json` is unmapped or a mapped name is stale.
+   - v2 parity contract: every tool in `mcp/tools-v2.json` and every in-scope operation in `mcp/operations-v2.json` is in some command's `mcpTools` or in `mcp/gaps-v2.json` with a reason and evidence, never both; `test/parity.test.ts` enforces it. A new gap needs a probe result, not a guess.
+   - Destructive commands take `YES_FLAG` and call `requireYes` (`src/commands/write.ts`); `--plan` must work without `--yes`.
+   - Binary or redirecting downloads use `HttpClient.requestRaw`; the token goes only to `api.atlassian.com`.
+   - A command declaring a `version` flag owns `--version`; `-V` stays the global version flag.
    - Every MCP parameter needs a flag or arg, or a stated reason it does not apply (`cloudId` is resolved from the site; `actionSource` is MCP telemetry).
 3. **Output contract** (agents depend on it; never break it silently):
    - stdout carries exactly one JSON value. Diagnostics go to stderr as JSONL (one object per line, never wrapped). `--help`/`--version` are the only text output.
@@ -48,7 +52,7 @@ Never commit a red `bun run check`.
    - Reads are compact by default. `--full` returns raw API objects, `--fields` projects, and lists return `{items, nextCursor}`.
    - Errors are `AtlError` with a stable `code`, a `category`, and a `hint` and `next` argv where a follow-up is obvious. Exit codes: 0 ok, 1 input/config/auth, 2 API/internal, 3 transient (429/5xx/timeout/409), 4 assertion.
 4. **Writes.**
-   - Named write commands send once and never retry. `--plan`/`--dry-run` returns the exact request and sends nothing; `next` is the argv without `--plan`.
+   - Named write commands send once and never retry. `--plan`/`--dry-run` returns the exact request and sends nothing; `next` is the argv without `--plan`. A write that times out or loses its connection throws `write_outcome_unknown` (transient, exit 3): the request may have been applied, so the hint says to read back before retrying; only reads use `timeout`/`network_error`.
    - `atl api` and `atl mcp call` require `--yes` for non-read operations.
    - Bodies come from `--body <text>` or `--file <path|->` (markdown converted locally to ADF); `loadBody`/`requireBody` enforce exactly one source. Version-bumped updates map a 409 to exit 3 with a re-read hint.
 5. **Tests.** Cover observable behavior: request URL/query/body for given flags, compact shapes from realistic fixtures, pagination, error codes, precedence.
@@ -66,7 +70,7 @@ Never commit a red `bun run check`.
 
 Output is read by agents; every byte costs context. Compact is the default; `--full` returns the raw API object.
 
-- **Prune invariant.** Compact output has no `null`, `undefined`, `""`, `[]` or `{}` at any depth, except the top-level `items` (an empty result prints `{"items":[]}`). Absent `nextCursor` means no more pages. `runCli` applies `prune` (`src/core/output.ts`) once, after `--fields` projection; error diagnostics are pruned too. Shape functions never pad with `?? null`, `?? []` or local prune helpers. `--full` is never pruned. Raw passthroughs (`atl api`, `atl mcp call`, MCP snapshots) are wrapped in `keepRaw` so compact mode leaves them intact (a `--fields` projection builds new objects and is pruned).
+- **Prune invariant.** Compact output has no `null`, `undefined`, `""`, `[]` or `{}` at any depth, except the top-level `items` (an empty result prints `{"items":[]}`). A list item that `--fields` projected to nothing stays `{}` (dropping it would change the count). Absent `nextCursor` means no more pages. `runCli` applies `prune` (`src/core/output.ts`) once, after `--fields` projection; error diagnostics are pruned too. Shape functions never pad with `?? null`, `?? []` or local prune helpers. `--full` is never pruned. Raw passthroughs (`atl api`, `atl mcp call`, MCP snapshots) are wrapped in `keepRaw` so compact mode leaves them intact (a `--fields` projection builds new objects and is pruned).
 - **Lists are minimal.** One flat item per row with only the fields a follow-up needs. Booleans appear only when they differ from the default (`required: true`, never `false`).
 - **People** are display names in lists (`assignee: "Ada"`); single-item views may carry `{accountId, name}`.
 - **Timestamps** go through `shortTs` (no sub-seconds).
@@ -77,7 +81,7 @@ Output is read by agents; every byte costs context. Compact is the default; `--f
 
 ## MCP upgrade flow
 
-The `mcp-watch` workflow (daily) opens an issue labelled `mcp-upstream` when the public MCP signals change: `server.json` version or remotes, MCP registry versions, protected-resource scopes, or a new `/vN/mcp` endpoint.
+The `mcp-watch` workflow (daily) opens an issue labelled `mcp-upstream` when the public MCP signals change: `server.json` version or remotes, MCP registry versions, protected-resource scopes, a new `/vN/mcp` endpoint, or the tool names listed on the public supported-tools page (`docs.supportedTools`; a new or removed name there is the unauthenticated signal that the v2 catalog changed).
 
 A source that cannot be fetched is reported as a workflow warning and skipped; it keeps its baseline value. The run fails only when every source is down, and `--write` refuses while any source is unavailable.
 
@@ -88,6 +92,17 @@ To handle an issue:
 3. If scopes changed, re-run `atl auth login` and probe the REST endpoints the commands use (`atl doctor`, then the affected reads). Record findings in `docs/design.md`.
 4. Run `bun test test/parity.test.ts` and `bun run check`.
 5. Run `bun scripts/mcp-watch.ts --write` to accept the new upstream snapshot. Close the issue by linking the change.
+
+### v2 catalog refresh
+
+`mcp/tools-v2.json` (the 21 primary tools) and `mcp/operations-v2.json` (every operation behind `discover`/`execute*`) need a login made for the v2 resource (`auth login --resource`), which opens a browser. The MCP filters its catalog by the token's scopes, so a v1 login shows almost nothing; `--snapshot` and `--catalog` refuse a stored login for another resource (`resource_mismatch`). Use a throwaway config dir so the main login is untouched; set `ATL_CONFIG_DIR` and `ATL_MCP_URL` inline, never export them:
+
+1. `D=$(mktemp -d)`, then `ATL_CONFIG_DIR=$D bun src/main.ts auth login --resource https://mcp.atlassian.com/v2/mcp`.
+2. `ATL_CONFIG_DIR=$D ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp bun src/main.ts mcp tools --snapshot --pretty --output mcp/tools-v2.json`, then the same with `mcp tools --catalog --pretty --output mcp/operations-v2.json`. `--catalog` lists `?tools=all`, asks `discover` for each operation by name and keeps the first sentence of its description; refreshing an unchanged catalog changes only `generatedAt` (`git diff mcp/`).
+3. `bun test test/parity.test.ts`. It fails on every catalog name that is neither in a command's `mcpTools` nor in `mcp/gaps-v2.json`. Map each one to a command, or add a `gaps-v2.json` entry whose `evidence` is a probe of the REST/GraphQL endpoint (status and error code), not a guess.
+4. `rm -rf "$D"`, then `bun scripts/mcp-watch.ts --write` and `bun run check`.
+
+Operations hidden by ungranted scopes or entitlement are absent from the catalog; the count `discover` reports as `totalCatalogSize` exceeds what `--catalog` returns.
 
 ## Security
 

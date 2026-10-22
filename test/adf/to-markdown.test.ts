@@ -242,7 +242,7 @@ describe("adfToMarkdown: inline", () => {
     );
   });
 
-  test("marks without markdown syntax become plain text", () => {
+  test("underline, sub and sup render as visible tags; colour has no syntax and stays plain", () => {
     expect(
       md(
         para(
@@ -251,7 +251,17 @@ describe("adfToMarkdown: inline", () => {
           text("c", mark("textColor", { color: "#ff0000" })),
         ),
       ),
-    ).toBe("u2c");
+    ).toBe("<u>u</u><sub>2</sub>c");
+    expect(
+      md(
+        para(
+          text("x"),
+          text("2", mark("subsup", { type: "sup" })),
+          text(" and "),
+          text("bold", mark("strong"), mark("underline")),
+        ),
+      ),
+    ).toBe("x<sup>2</sup> and **<u>bold</u>**");
   });
 
   test("whitespace is moved outside emphasis delimiters", () => {
@@ -398,5 +408,78 @@ describe("adfToMarkdown: media, extensions, unknown", () => {
     ).toBe("left\n\nright");
     expect(md(node("somethingNew"))).toBe("<!-- adf:somethingNew -->");
     expect(md(para(text("a"), node("weirdInline")))).toBe("a<!-- adf:weirdInline -->");
+  });
+});
+
+describe("adfToMarkdown: nightmare fidelity", () => {
+  const nestedTable = node("table", [
+    node("tableRow", [cell("tableHeader", para(text("a"))), cell("tableHeader", para(text("b")))]),
+    node("tableRow", [cell("tableCell", para(text("1"))), cell("tableCell", para(text("2")))]),
+  ]);
+  const legacy = (parameters: Record<string, unknown>): AdfNode =>
+    node("extension", undefined, {
+      extensionType: "com.atlassian.confluence.migration",
+      extensionKey: "legacy-content",
+      parameters,
+    });
+
+  test("legacy-content renders its nested content instead of hiding it", () => {
+    const nestedContent = doc(nestedTable);
+    expect(
+      md(node("bulletList", [node("listItem", [para(text("a")), legacy({ nestedContent })])])),
+    ).toBe("- a\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |");
+    expect(
+      md(
+        legacy({
+          nestedContent: doc(
+            node("taskList", [node("taskItem", [text("task in quote")], { state: "TODO" })]),
+          ),
+        }),
+      ),
+    ).toBe("- [ ] task in quote");
+  });
+
+  test("legacy-content without nested ADF shows its storage markup in a fence", () => {
+    expect(md(legacy({ cxhtml: "<table><tr><td>x</td></tr></table>" }))).toBe(
+      "```xml\n<table><tr><td>x</td></tr></table>\n```",
+    );
+    expect(md(legacy({}))).toBe("<!-- macro:legacy-content -->");
+  });
+
+  test("merged table cells repeat their text so values stay under the right headers", () => {
+    const span = (type: string, attrs: Record<string, unknown>, value: string): AdfNode =>
+      node(type, [para(text(value))], attrs);
+    expect(
+      md(
+        node("table", [
+          node("tableRow", [
+            span("tableHeader", { colspan: 1 }, "Region"),
+            span("tableHeader", { colspan: 2 }, "Q1"),
+          ]),
+          node("tableRow", [
+            span("tableCell", { rowspan: 2 }, "EU"),
+            span("tableCell", {}, "10"),
+            span("tableCell", {}, "20"),
+          ]),
+          node("tableRow", [span("tableCell", {}, "30"), span("tableCell", {}, "40")]),
+        ]),
+      ),
+    ).toBe("| Region | Q1 | Q1 |\n| --- | --- | --- |\n| EU | 10 | 20 |\n| EU | 30 | 40 |");
+  });
+
+  test("an external image without alt text renders an empty alt, not the file placeholder", () => {
+    expect(
+      md(
+        node("mediaSingle", [
+          node("media", undefined, { type: "external", url: "https://e/i.png" }),
+        ]),
+      ),
+    ).toBe("![](https://e/i.png)");
+  });
+
+  test("a linked image reads back as [![alt](src)](href)", () => {
+    const media = node("media", undefined, { type: "external", url: "https://e/i.png", alt: "l" });
+    media.marks = [mark("link", { href: "https://x.example" })];
+    expect(md(node("mediaSingle", [media]))).toBe("[![l](https://e/i.png)](https://x.example)");
   });
 });

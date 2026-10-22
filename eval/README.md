@@ -7,7 +7,8 @@ Token and agent-friendliness eval of `atl` against the Atlassian Remote MCP (v1)
 | `seed.ts` | seeds Jira project KAN and Confluence space SZOFTVERFE, writes `.out/manifest.json` (ground truth) |
 | `lib.ts` | shared plumbing: binary path, subprocess runner, `omp toks` counts, MCP session, manifest loader |
 | `micro.ts` | one call each: 15 atl command / MCP tool pairs; bytes, Claude tokens, info-parity check |
-| `scenarios.ts` | eight natural-language scenarios with answer checks from the manifest |
+| `scenarios.ts` | eight natural-language scenarios (s1-s8) with answer checks from the manifest |
+| `nightmare/scenarios.ts` | fifteen scenarios (n01-n15) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence}.json` |
 | `run.ts` | macro eval: headless `omp -p` agents per arm and scenario; metrics per run |
 | `report.ts` | builds `.out/report.md` from `micro.json` and the run metrics |
 
@@ -28,6 +29,13 @@ bun eval/seed.ts            # creates ~176 issues and ~46 pages; refuses to run 
 
 The seed is not idempotent (the token cannot delete), so run it once per site. The manifest lists the needles (known answers) the scenarios check.
 
+```bash
+bun eval/nightmare/seed-jira.ts          # ~110 KAN issues labelled nightmare; manifest .out/nightmare/jira.json
+bun eval/nightmare/seed-confluence.ts    # ~143 pages under "atl smoke nm Corporate Wiki"; manifest .out/nightmare/confluence.json
+```
+
+The corporate-nightmare seeders drive the CLI binary above (`NM_ATL=<path>` for another one), are idempotent (re-runs find existing content by label or title and only rebuild the manifest), and plant the `facts` the n01-n15 scenarios check. Everything they create is prefixed `atl smoke nm`.
+
 ## Micro eval
 
 ```bash
@@ -44,7 +52,9 @@ bun eval/run.ts run --rep 1                 # all scenarios, both arms, sequenti
 bun eval/run.ts run --rep 1 --arms atl --tag r2   # round 2: files go to runs/atl-r2/ (rebuild the binary first)
 bun eval/run.ts run --rep 2 --scenarios s3-rollback-window --arms atl
 bun eval/run.ts run --rep 11 --sessions --scenarios s4-handbook-retention,s6-epic-children
-bun eval/run.ts rejudge                     # re-apply the current answer checks to saved final texts
+bun eval/run.ts rejudge                     # re-apply the current answer checks (both sets) to saved final texts
+bun eval/run.ts list --set nightmare        # scenario ids without a model call
+bun eval/run.ts run --set nightmare --arms atl,mcp --rep 1 --scenarios n01-chain-root   # corporate-nightmare set
 ```
 
 Arms live in `/tmp/atl-eval/arms/<arm>`:

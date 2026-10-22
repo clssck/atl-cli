@@ -1,5 +1,4 @@
 import { isRecord } from "../core/guards.ts";
-import { adfToMarkdown } from "./to-markdown.ts";
 import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
 
 /**
@@ -9,21 +8,90 @@ import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
  * with entities already decoded; it is walked here without React.
  *
  * Choices worth knowing:
- * - Raw HTML (block or inline) is kept as literal text; `<br>` becomes a hardBreak.
- * - Images become `mediaSingle > media` (external URL, or `media:<id>[?collection=c]` -> file media);
- *   an image in the middle of a paragraph splits it, and inside headings/task items it degrades to a link.
+ * - Raw HTML (block or inline) is kept as literal text; `<br>` becomes a hardBreak and
+ *   `<sub>`, `<sup>`, `<u>` become the subsup / underline marks.
+ * - An image alone in its paragraph becomes `mediaSingle > media` (external URL, or
+ *   `media:<id>[?collection=c]` -> file media; a link around it becomes a link mark on the media).
+ *   An image sharing a paragraph with text stays inline so the paragraph is not split: a file image
+ *   becomes `mediaInline`, an external one a link on its alt text. In headings and task items every
+ *   image degrades to a link.
+ * - Bare `http(s)://` URLs are linked, including ones with balanced parentheses.
+ * - Links with an empty or whitespace destination are plain text.
  * - Soft line breaks become a space; `\` + newline or two trailing spaces become hardBreak.
+ * - Tabs inside fenced code are preserved (the parser would expand them to spaces).
  * - The `code` mark is only combined with `link` (ADF forbids other marks on code).
- * - Task items that nest lists produce nested taskLists; blockquote/listItem children that ADF forbids
- *   (headings, rules, nested quotes) are rewritten to bold paragraphs / lifted.
+ * - ADF forbids some children in containers, so they are moved or rewritten without loss of text:
+ *   a table or task list inside a blockquote, and a table inside a list item, are placed after
+ *   the item (the quote or list is split there); headings, rules and nested quotes inside
+ *   blockquote/listItem become bold paragraphs / lifted. A taskItem holds inline content only:
+ *   code fences, tables, quotes and plain nested lists inside one are placed after it (the task
+ *   list is split there); nested task items become nested taskLists. A task list has no numbering,
+ *   so `1. [ ] x` becomes an unordered task list.
  * - Table column alignment is parsed but not emitted: ADF table cells have no alignment attribute.
  */
 export function markdownToAdf(markdown: string): AdfDoc {
-  const root: unknown = Bun.markdown.react(markdown.replaceAll(/\r\n?/g, "\n"), {}, OPTIONS);
-  return { type: "doc", version: 1, content: blocks(isElement(root) ? childrenOf(root) : []) };
+  const source = markdown.replaceAll(/\r\n?/g, "\n");
+  const protect = source.includes("\t") && !source.includes(TAB_SENTINEL);
+  const root: unknown = Bun.markdown.react(
+    protect ? protectFenceTabs(source) : source,
+    {},
+    OPTIONS,
+  );
+  const content = blocks(isElement(root) ? childrenOf(root) : []);
+  if (protect) {
+    restoreTabs(content);
+  }
+  return { type: "doc", version: 1, content };
 }
 
 const OPTIONS: Bun.markdown.ReactOptions = { autolinks: true };
+
+/**
+ * md4c expands tabs in code to spaces. Tabs inside fenced code are swapped for a Unicode
+ * noncharacter before parsing and swapped back in the codeBlock text afterwards; a source that
+ * already contains the sentinel keeps the parser's expansion.
+ */
+const TAB_SENTINEL = "\uFDD0";
+
+/** Opener: container prefix (indent, quote markers, list markers), then the fence. */
+const FENCE_OPEN = /^([ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*)(`{3,}|~{3,})(.*)$/;
+
+function protectFenceTabs(source: string): string {
+  let fence: { prefix: number; char: string; length: number } | undefined;
+  return source
+    .split("\n")
+    .map((line) => {
+      if (fence === undefined) {
+        const open = FENCE_OPEN.exec(line);
+        const [, prefix = "", ticks = "", info = ""] = open ?? [];
+        if (open !== null && !(ticks.startsWith("`") && info.includes("`"))) {
+          fence = { prefix: prefix.length, char: ticks.charAt(0), length: ticks.length };
+        }
+        return line;
+      }
+      const rest = line.slice(fence.prefix).trim();
+      if (rest.length >= fence.length && rest === fence.char.repeat(rest.length)) {
+        fence = undefined;
+        return line;
+      }
+      return line.slice(0, fence.prefix) + line.slice(fence.prefix).replaceAll("\t", TAB_SENTINEL);
+    })
+    .join("\n");
+}
+
+function restoreTabs(nodes: AdfNode[]): void {
+  for (const node of nodes) {
+    if (node.type === "codeBlock") {
+      for (const child of node.content ?? []) {
+        if (child.text !== undefined) {
+          child.text = child.text.replaceAll(TAB_SENTINEL, "\t");
+        }
+      }
+    } else {
+      restoreTabs(node.content ?? []);
+    }
+  }
+}
 
 type ImageMode = "media" | "link";
 
@@ -200,7 +268,7 @@ function mergeText(nodes: AdfNode[]): AdfNode[] {
   return out;
 }
 
-function imageNode(href: string, alt: string): AdfNode {
+function imageNode(href: string, alt: string, link: AdfMark | undefined): AdfNode {
   let media: AdfNode;
   if (href.startsWith("media:")) {
     const [id = "", query = ""] = href.slice("media:".length).split("?", 2);
@@ -217,7 +285,23 @@ function imageNode(href: string, alt: string): AdfNode {
     }
     media = make("media", attrs);
   }
+  if (link !== undefined) {
+    media.marks = [link];
+  }
   return make("mediaSingle", { layout: "center" }, [media]);
+}
+
+/** A block image that shares its paragraph with text, in inline form. */
+function inlineImage(single: AdfNode): AdfNode {
+  const media = single.content?.[0];
+  const attrs = media?.attrs ?? {};
+  const link = media?.marks?.find((mark) => mark.type === "link");
+  const alt = typeof attrs.alt === "string" ? attrs.alt : "";
+  if (attrs.type === "file") {
+    return make("mediaInline", { type: "file", id: attrs.id, collection: attrs.collection });
+  }
+  const url = typeof attrs.url === "string" ? attrs.url : "";
+  return textNode(alt === "" ? url : alt, [link ?? { type: "link", attrs: { href: url } }]);
 }
 
 /** GFM extended autolinks arrive without a scheme (`www.x.y`, `me@x.y`); give them one. */
@@ -233,17 +317,95 @@ function autolinkHref(href: string, children: MdChild[]): string {
 
 const BR_HTML = /^<br\s*\/?>$/i;
 
+const MARK_TAG = /^<(\/?)(sub|sup|u)>$/i;
+const TAG_MARKS: Record<string, AdfMark> = {
+  sub: { type: "subsup", attrs: { type: "sub" } },
+  sup: { type: "subsup", attrs: { type: "sup" } },
+  u: { type: "underline" },
+};
+
+/** Start of a URL the parser left as text: after a non-word character, with a host character next. */
+const URL_START = /(?<![\p{L}\p{N}_])https?:\/\/(?=[\p{L}\p{N}-])/iu;
+
+/** GFM: trailing punctuation is not part of the URL, and a `)` only if its `(` is inside it. */
+function trimUrl(raw: string): string {
+  let url = raw;
+  for (;;) {
+    const last = url.at(-1);
+    if (last !== undefined && /[?!.,:;*~'"_]/.test(last)) {
+      url = url.slice(0, -1);
+    } else if (last === ")" && url.split(")").length > url.split("(").length) {
+      url = url.slice(0, -1);
+    } else {
+      return url;
+    }
+  }
+}
+
+/**
+ * `Bun.markdown` does not link URLs that contain parentheses, and an underscore before `(` splits
+ * the text around an emphasis delimiter. An unescaped `scheme://` left in text is such a URL (an
+ * escaped `https\://` is split by the parser and never matches): link it here, gathering the
+ * text pieces that follow until whitespace.
+ */
+function linkBareUrls(children: MdChild[]): MdChild[] {
+  const out: MdChild[] = [];
+  for (let index = 0; index < children.length;) {
+    const child = children[index];
+    index += 1;
+    if (typeof child !== "string") {
+      if (child !== undefined) {
+        out.push(child);
+      }
+      continue;
+    }
+    let text = child;
+    for (let start = text.search(URL_START); start !== -1; start = text.search(URL_START)) {
+      let rest = text.slice(start);
+      for (
+        let next = children[index];
+        typeof next === "string" && !/[\s<]/.test(rest);
+        next = children[index]
+      ) {
+        rest += next;
+        index += 1;
+      }
+      const url = trimUrl(rest.slice(0, rest.search(/[\s<]|$/)));
+      if (start > 0) {
+        out.push(text.slice(0, start));
+      }
+      out.push({ type: "a", props: { href: url, bare: true, children: [url] } });
+      text = rest.slice(url.length);
+    }
+    if (text !== "") {
+      out.push(text);
+    }
+  }
+  return out;
+}
+
 function inline(children: MdChild[], marks: AdfMark[], images: ImageMode): AdfNode[] {
   const out: AdfNode[] = [];
-  const text = (value: string, withMarks: AdfMark[] = marks): void => {
+  let current = marks;
+  const text = (value: string, withMarks: AdfMark[] = current): void => {
     if (value.length > 0) {
       out.push(textNode(value, withMarks));
     }
   };
-  for (const child of children) {
+  const linked = marks.some((mark) => mark.type === "link");
+  for (const child of linked ? children : linkBareUrls(children)) {
     if (typeof child === "string") {
+      const tag = MARK_TAG.exec(child);
+      const tagMark = tag === null ? undefined : TAG_MARKS[(tag[2] ?? "").toLowerCase()];
       if (BR_HTML.test(child)) {
         out.push({ type: "hardBreak" });
+      } else if (tag !== null && tagMark !== undefined) {
+        current =
+          tag[1] === "/"
+            ? current.filter(
+                (mark) => mark.type !== tagMark.type || mark.attrs?.type !== tagMark.attrs?.type,
+              )
+            : addMark(current, tagMark);
       } else {
         text(child.replaceAll(/[ \t]*\n[ \t]*/g, " "));
       }
@@ -252,43 +414,50 @@ function inline(children: MdChild[], marks: AdfMark[], images: ImageMode): AdfNo
     const nested = childrenOf(child);
     switch (tagOf(child)) {
       case "strong":
-        out.push(...inline(nested, addMark(marks, { type: "strong" }), images));
+        out.push(...inline(nested, addMark(current, { type: "strong" }), images));
         break;
       case "em":
-        out.push(...inline(nested, addMark(marks, { type: "em" }), images));
+        out.push(...inline(nested, addMark(current, { type: "em" }), images));
         break;
       case "del":
-        out.push(...inline(nested, addMark(marks, { type: "strike" }), images));
+        out.push(...inline(nested, addMark(current, { type: "strike" }), images));
         break;
       case "code":
-        text(plainText(nested).replaceAll("\n", " "), addMark(marks, { type: "code" }));
+        text(plainText(nested).replaceAll("\n", " "), addMark(current, { type: "code" }));
         break;
       case "a": {
-        const href = autolinkHref(unescapeAttr(stringProp(child, "href") ?? ""), nested);
+        const raw = stringProp(child, "href") ?? "";
+        const href = autolinkHref(child.props.bare === true ? raw : unescapeAttr(raw), nested);
+        if (href === "" || /\s/.test(href)) {
+          out.push(...inline(nested, current, images));
+          break;
+        }
         const attrs: Record<string, unknown> = { href };
         const title = unescapeAttr(stringProp(child, "title") ?? "");
         if (title !== "") {
           attrs.title = title;
         }
-        const linked = addMark(marks, { type: "link", attrs });
-        const content = inline(nested, linked, images);
+        const withLink = addMark(current, { type: "link", attrs });
+        const content = inline(nested, withLink, images);
         if (content.length > 0) {
           out.push(...content);
         } else {
-          text(href, linked);
+          text(href, withLink);
         }
         break;
       }
       case "img": {
         const src = unescapeAttr(stringProp(child, "src") ?? "");
         const alt = stringProp(child, "alt") ?? "";
+        const link = current.find((mark) => mark.type === "link");
         if (images === "media") {
-          out.push(imageNode(src, alt));
+          out.push(imageNode(src, alt, link));
         } else if (src.startsWith("media:")) {
           text(alt === "" ? "file" : alt);
         } else {
-          const link: AdfMark = { type: "link", attrs: { href: src } };
-          text(alt === "" ? src : alt, addMark(marks, link));
+          const withLink =
+            link === undefined ? addMark(current, { type: "link", attrs: { href: src } }) : current;
+          text(alt === "" ? src : alt, withLink);
         }
         break;
       }
@@ -296,7 +465,7 @@ function inline(children: MdChild[], marks: AdfMark[], images: ImageMode): AdfNo
         out.push({ type: "hardBreak" });
         break;
       default:
-        out.push(...inline(nested, marks, images));
+        out.push(...inline(nested, current, images));
     }
   }
   return mergeText(out);
@@ -318,8 +487,23 @@ function isBlank(nodes: AdfNode[]): boolean {
   return nodes.every((node) => node.type === "text" && (node.text ?? "").trim() === "");
 }
 
-/** Inline nodes -> paragraph(s); media nodes are hoisted out as blocks, splitting the paragraph. */
+/**
+ * Inline nodes -> paragraph(s). An image alone in its paragraph is hoisted out as a block
+ * (mediaSingle); one that shares the paragraph with text stays inline so the paragraph is not split.
+ */
 function toParagraphs(nodes: AdfNode[]): AdfNode[] {
+  const hasImage = nodes.some((node) => node.type === "mediaSingle");
+  if (
+    hasImage &&
+    !nodes.every(
+      (node) => node.type === "mediaSingle" || node.type === "hardBreak" || isBlank([node]),
+    )
+  ) {
+    const content = trimBreaks(
+      nodes.map((node) => (node.type === "mediaSingle" ? inlineImage(node) : node)),
+    );
+    return [make("paragraph", undefined, content)];
+  }
   const out: AdfNode[] = [];
   let run: AdfNode[] = [];
   const flush = (): void => {
@@ -372,7 +556,28 @@ function restrictChildren(nodes: AdfNode[]): AdfNode[] {
       out.push(node);
     }
   }
-  return out.length > 0 ? out : [emptyParagraph()];
+  return out;
+}
+
+/** The quote, split where a forbidden child sits so the child follows the text before it. */
+function quoteNodes(children: AdfNode[]): AdfNode[] {
+  const out: AdfNode[] = [];
+  let kept: AdfNode[] = [];
+  for (const node of restrictChildren(children)) {
+    if (node.type === "table" || node.type === "taskList") {
+      if (kept.length > 0) {
+        out.push(make("blockquote", undefined, kept));
+        kept = [];
+      }
+      out.push(node);
+    } else {
+      kept.push(node);
+    }
+  }
+  if (kept.length > 0 || out.length === 0) {
+    out.push(make("blockquote", undefined, kept.length > 0 ? kept : [emptyParagraph()]));
+  }
+  return out;
 }
 
 function codeBlock(element: MdElement): AdfNode {
@@ -408,11 +613,17 @@ function listItemsOf(list: MdElement): MdElement[] {
   );
 }
 
-function taskListOf(items: MdElement[]): AdfNode {
-  const content: AdfNode[] = [];
+/**
+ * A taskItem holds inline content only: lists that are not task lists and every other block
+ * (code, table, quote, ...) are placed after the item, splitting the taskList there.
+ */
+function taskListOf(items: MdElement[]): AdfNode[] {
+  const out: AdfNode[] = [];
+  let content: AdfNode[] = [];
   for (const item of items) {
     let body: AdfNode[] = [];
     const nested: AdfNode[] = [];
+    const hoisted: AdfNode[] = [];
     const append = (nodes: AdfNode[]): void => {
       if (nodes.length > 0) {
         if (body.length > 0) {
@@ -430,11 +641,11 @@ function taskListOf(items: MdElement[]): AdfNode {
       if (tag === "p") {
         append(trimBreaks(inline(childrenOf(block), [], "link")));
       } else if (tag === "ul" || tag === "ol") {
-        nested.push(taskListOf(listItemsOf(block)));
+        for (const list of listNodes(block)) {
+          (list.type === "taskList" ? nested : hoisted).push(list);
+        }
       } else {
-        // taskItem holds inline content only: keep any other block as its markdown text.
-        const markdown = adfToMarkdown({ type: "doc", version: 1, content: blocks([block]) });
-        append(markdown === "" ? [] : [textNode(markdown, [])]);
+        hoisted.push(...blocks([block]));
       }
     });
     const first = body[0];
@@ -445,10 +656,21 @@ function taskListOf(items: MdElement[]): AdfNode {
     }
     const attrs = { localId: newId(), state: item.props.checked === true ? "DONE" : "TODO" };
     content.push(make("taskItem", attrs, body.length > 0 ? body : undefined), ...nested);
+    if (hoisted.length > 0) {
+      out.push(make("taskList", { localId: newId() }, content), ...hoisted);
+      content = [];
+    }
   }
-  return make("taskList", { localId: newId() }, content);
+  if (content.length > 0) {
+    out.push(make("taskList", { localId: newId() }, content));
+  }
+  return out;
 }
 
+/**
+ * Lists. A table inside an item cannot stay in a listItem, so the list is split after that item
+ * and the table follows it (ordered numbering continues in the second part).
+ */
 function listNodes(list: MdElement): AdfNode[] {
   const runs: { task: boolean; items: MdElement[] }[] = [];
   for (const item of listItemsOf(list)) {
@@ -466,19 +688,32 @@ function listNodes(list: MdElement): AdfNode[] {
   let order = typeof start === "number" ? start : 1;
   for (const run of runs) {
     if (run.task) {
-      out.push(taskListOf(run.items));
+      out.push(...taskListOf(run.items));
       order += run.items.length;
       continue;
     }
-    const items = run.items.map((item) =>
-      make("listItem", undefined, restrictChildren(blocks(childrenOf(item)))),
-    );
-    if (ordered) {
-      out.push(make("orderedList", order === 1 ? undefined : { order }, items));
-      order += run.items.length;
-    } else {
-      out.push(make("bulletList", undefined, items));
+    let items: AdfNode[] = [];
+    const flush = (): void => {
+      if (items.length > 0) {
+        out.push(
+          ordered
+            ? make("orderedList", order === 1 ? undefined : { order }, items)
+            : make("bulletList", undefined, items),
+        );
+        order += items.length;
+        items = [];
+      }
+    };
+    for (const item of run.items) {
+      const children = restrictChildren(blocks(childrenOf(item)));
+      const kept = children.filter((node) => node.type !== "table");
+      items.push(make("listItem", undefined, kept.length > 0 ? kept : [emptyParagraph()]));
+      if (kept.length < children.length) {
+        flush();
+        out.push(...children.filter((node) => node.type === "table"));
+      }
     }
+    flush();
   }
   return out;
 }
@@ -541,7 +776,7 @@ function blocks(children: MdChild[]): AdfNode[] {
         out.push(codeBlock(block));
         break;
       case "blockquote":
-        out.push(make("blockquote", undefined, restrictChildren(blocks(childrenOf(block)))));
+        out.push(...quoteNodes(blocks(childrenOf(block))));
         break;
       case "ul":
       case "ol":

@@ -36,6 +36,18 @@ export interface RequestOptions {
   accept?: string;
 }
 
+export interface RawRequestOptions {
+  method: HttpMethod;
+  /** Absolute https URL; no `query` (build it with `buildUrl`). */
+  url: string;
+  /** Sent as-is (e.g. `FormData`, which sets its own multipart `Content-Type`). */
+  body?: Bun.BodyInit;
+  /** Extra headers; any `Authorization` here is ignored, the client decides. */
+  headers?: Readonly<Record<string, string>>;
+  /** Defaults to any media type. */
+  accept?: string;
+}
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_ATTEMPTS = 3;
 /**
@@ -44,8 +56,14 @@ export const MAX_ATTEMPTS = 3;
  * Retry-After past the remaining budget fails fast (exit 3) with a hint saying when to retry.
  */
 export const RETRY_BUDGET_MS = 20_000;
+
+/** Atlassian API gateway; the only origin that receives the bearer token. */
+export const API_ORIGIN = "https://api.atlassian.com";
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 const BASE_BACKOFF_MS = 500;
 const MAX_ERROR_MESSAGE_CHARS = 500;
+const MAX_HTML_MESSAGE_CHARS = 200;
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 502, 503, 504]);
 
 function appendQuery(url: URL, query: Query | undefined): void {
@@ -95,10 +113,44 @@ export function parseRetryAfter(
   return Math.max(0, at - now);
 }
 
-function truncate(text: string): string {
-  return text.length > MAX_ERROR_MESSAGE_CHARS
-    ? `${text.slice(0, MAX_ERROR_MESSAGE_CHARS - 3)}...`
-    : text;
+function truncate(text: string, max: number = MAX_ERROR_MESSAGE_CHARS): string {
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+const HTML_BODY = /^<(?:!doctype\s+html|html|head|body|\?xml)/i;
+const HTML_ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&nbsp;": " ",
+};
+
+/** Tag-stripped, entity-decoded, whitespace-collapsed text of an HTML fragment. */
+function plainText(markup: string): string {
+  return markup
+    .replaceAll(/<[^>]*>/g, " ")
+    .replaceAll(/&(?:amp|lt|gt|quot|nbsp|#39);/g, (entity) => HTML_ENTITIES[entity] ?? entity)
+    .replaceAll(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Gateway and Tomcat error pages are HTML with hundreds of bytes of CSS; keep only the page's
+ * `<title>` (else its first `<h1>`, else its tag-stripped text), at most 200 characters.
+ */
+function textOfHtml(html: string): string | undefined {
+  const markup = html.replaceAll(/<(style|script)\b[\s\S]*?<\/\1>/gi, " ");
+  for (const tag of ["title", "h1"]) {
+    const inner = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(markup)?.[1];
+    const text = inner === undefined ? "" : plainText(inner);
+    if (text !== "") {
+      return truncate(text, MAX_HTML_MESSAGE_CHARS);
+    }
+  }
+  const text = plainText(markup);
+  return text === "" ? undefined : truncate(text, MAX_HTML_MESSAGE_CHARS);
 }
 
 function describeEntry(entry: unknown): string | undefined {
@@ -116,7 +168,8 @@ function describeEntry(entry: unknown): string | undefined {
 
 /**
  * Pull a human message out of common Atlassian error bodies: `errorMessages[]`, `errors{}` or
- * `errors[]`, `message`, `error_description`, `error`. Non-JSON bodies are used verbatim.
+ * `errors[]`, `message`, `error_description`, `error`. HTML error pages reduce to their title
+ * (200 characters); other non-JSON bodies are used verbatim.
  * Result is truncated to 500 characters; undefined when the body carries nothing useful.
  */
 export function extractErrorMessage(bodyText: string): string | undefined {
@@ -128,7 +181,7 @@ export function extractErrorMessage(bodyText: string): string | undefined {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return truncate(text);
+    return HTML_BODY.test(text) ? textOfHtml(text) : truncate(text);
   }
   if (!isRecord(parsed)) {
     return typeof parsed === "string" ? truncate(parsed) : undefined;
@@ -233,19 +286,24 @@ export function mapHttpError(
 
 function networkError(method: string, url: string, error: unknown, timeoutMs: number): AtlError {
   const path = urlPath(url);
+  // A write that died mid-flight may or may not have been applied; only reads are safe to rerun.
+  const readOnly = method === "GET" || method === "HEAD";
+  const unknown = "The request may have been applied; read back before retrying.";
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
     return new AtlError(`${method} ${path} timed out after ${timeoutMs} ms`, {
-      code: "timeout",
+      code: readOnly ? "timeout" : "write_outcome_unknown",
       category: "transient",
-      hint: "Raise ATL_TIMEOUT_MS or retry.",
+      hint: readOnly
+        ? "Raise ATL_TIMEOUT_MS or retry."
+        : `${unknown} Raise ATL_TIMEOUT_MS if it recurs.`,
       cause: error,
     });
   }
   const detail = error instanceof Error ? error.message : String(error);
   return new AtlError(`${method} ${path} failed: ${detail}`, {
-    code: "network_error",
+    code: readOnly ? "network_error" : "write_outcome_unknown",
     category: "transient",
-    hint: "Network failure; check connectivity and retry.",
+    hint: readOnly ? "Network failure; check connectivity and retry." : unknown,
     cause: error,
   });
 }
@@ -279,9 +337,32 @@ export class HttpClient {
    * `RETRY_BUDGET_MS` of sleep); writes never retry.
    */
   async request<T = unknown>(options: RequestOptions): Promise<T> {
-    const { method } = options;
-    const idempotent = method === "GET" || method === "HEAD";
     const url = buildUrl(options.url, "", options.query);
+    const response = await this.#execute(options.method, url, () => this.#send(url, options));
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- untyped JSON boundary; each caller declares the response shape via T
+    return (await this.#parse(response, options.method, url)) as T;
+  }
+
+  /**
+   * Send one request with a caller-built body (multipart, binary) and return the successful
+   * `Response` unread, for binary downloads and uploads that `request` cannot carry. Same auth,
+   * retry (GET/HEAD only) and error mapping as `request`; the timeout covers only the wait for
+   * response headers, so a large download's body is not cut off. Redirects are followed by hand,
+   * https only, and the bearer token is sent only to `API_ORIGIN`: a redirect to another origin
+   * (e.g. the media service) is fetched without `Authorization`.
+   */
+  async requestRaw(options: RawRequestOptions): Promise<Response> {
+    const url = buildUrl(options.url, "");
+    return this.#execute(options.method, url, () => this.#sendRaw(url, options));
+  }
+
+  /** Run `send` under the retry policy and return the first 2xx response; anything else throws an AtlError. */
+  async #execute(
+    method: HttpMethod,
+    url: string,
+    send: () => Promise<Response>,
+  ): Promise<Response> {
+    const idempotent = method === "GET" || method === "HEAD";
     const maxAttempts = idempotent ? MAX_ATTEMPTS : 1;
     let slept = 0;
 
@@ -298,7 +379,7 @@ export class HttpClient {
 
       let response: Response;
       try {
-        response = await this.#send(url, options);
+        response = await send();
       } catch (error) {
         if (error instanceof AtlError) {
           throw error;
@@ -311,8 +392,7 @@ export class HttpClient {
       }
 
       if (response.ok) {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- untyped JSON boundary; each caller declares the response shape via T
-        return (await this.#parse(response, method, url)) as T;
+        return response;
       }
 
       const { status } = response;
@@ -356,6 +436,87 @@ export class HttpClient {
       headers,
       ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
       signal: AbortSignal.timeout(this.#timeoutMs),
+    });
+  }
+
+  /**
+   * The timeout bounds the wait for response headers only: a successful response is returned with
+   * its timer cleared, so a large body streams unbounded. A failed response keeps the timer so its
+   * error body is still bounded when `#execute` reads it.
+   */
+  async #sendRaw(startUrl: string, options: RawRequestOptions): Promise<Response> {
+    const token = await this.#getToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    }, this.#timeoutMs);
+    timer.unref();
+    try {
+      const response = await this.#followRedirects(startUrl, options, token, controller.signal);
+      if (response.ok) {
+        clearTimeout(timer);
+      }
+      return response;
+    } catch (error) {
+      clearTimeout(timer);
+      throw error;
+    }
+  }
+
+  async #followRedirects(
+    startUrl: string,
+    options: RawRequestOptions,
+    token: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    let { method, body } = options;
+    let target = startUrl;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const url = new URL(target);
+      if (url.protocol !== "https:") {
+        throw new AtlError(`Refusing to send ${method} to ${url.protocol}//${url.host}`, {
+          code: "insecure_url",
+          category: "api",
+          hint: "Only https URLs are allowed.",
+        });
+      }
+      const headers: Record<string, string> = { Accept: options.accept ?? "*/*" };
+      for (const [name, value] of Object.entries(options.headers ?? {})) {
+        if (name.toLowerCase() !== "authorization") {
+          headers[name] = value;
+        }
+      }
+      if (url.origin === API_ORIGIN) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      headers["User-Agent"] = USER_AGENT;
+
+      const response = await this.#fetch(target, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        redirect: "manual",
+        signal,
+      });
+      const location = response.headers.get("location");
+      if (!REDIRECT_STATUSES.has(response.status) || location === null) {
+        return response;
+      }
+      await response.body?.cancel();
+      target = new URL(location, target).href;
+      if (
+        response.status !== 307 &&
+        response.status !== 308 &&
+        method !== "GET" &&
+        method !== "HEAD"
+      ) {
+        method = "GET";
+        body = undefined;
+      }
+    }
+    throw new AtlError(`Too many redirects for ${method} ${urlPath(startUrl)}`, {
+      code: "too_many_redirects",
+      category: "api",
     });
   }
 

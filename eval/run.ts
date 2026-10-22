@@ -4,9 +4,12 @@
  *
  * Usage:
  *   bun eval/run.ts probe                          verify the arms' tool surface (1 prompt each)
- *   bun eval/run.ts rejudge                        re-apply the answer checks to saved final texts
- *   bun eval/run.ts run [--rep N] [--arms atl,mcp] [--scenarios s1-needle-quartz,...]
+ *   bun eval/run.ts rejudge                        re-apply the answer checks (both sets) to saved final texts
+ *   bun eval/run.ts list [--set macro|nightmare]   scenario ids, kind and name (no model call)
+ *   bun eval/run.ts run [--set macro|nightmare] [--rep N] [--arms atl,mcp] [--scenarios s1-needle-quartz,...]
  *                       [--tag label] [--sessions]
+ *
+ * `--set nightmare` runs n01-n15 (eval/nightmare/scenarios.ts) and writes to runs/<arm>-nm[-label]/.
  *
  * `--tag r3` writes to runs/<arm>-r3/ (a later round; rebuild the atl binary first). Every command
  * recreates the arm workdirs and the skill copy, so only /tmp/atl-eval/bin/atl must exist.
@@ -32,6 +35,7 @@ import {
   run,
   writeJson,
 } from "./lib.ts";
+import { buildNightmareScenarios } from "./nightmare/scenarios.ts";
 import { type Arm, buildScenarios, type Check, type Scenario, WRITE_FROM, writeCandidates } from "./scenarios.ts";
 
 const ARMS: Arm[] = ["atl", "mcp"];
@@ -40,6 +44,8 @@ const MAX_TIME = "10m";
 const SESSION_DIR = "/tmp/atl-eval/sessions";
 /** Reps at or above this number are the session-persisting variant (artifact:// readable). */
 export const SESSION_REP = 10;
+/** Run-dir tag of the nightmare set (runs/<arm>-nm[-tag]/), which keeps those runs out of the s1-s8 report. */
+const NIGHTMARE_TAG = "nm";
 const PROBE_PROMPT =
   "List the exact names of every tool available to you whose name mentions atlassian, jira, confluence or rovo, one per line. If there are none, reply with the single word none. Do not call any tool.";
 
@@ -271,7 +277,7 @@ async function runOne(
   const dir = join(RUNS, tag === undefined ? arm : `${arm}-${tag}`);
   mkdirSync(dir, { recursive: true });
   const stem = join(dir, `${scenario.id}-${rep}`);
-  const target = scenario.write ? await pickTarget() : undefined;
+  const target = scenario.write ? (scenario.pickTarget?.() ?? (await pickTarget())) : undefined;
   const prompt = scenario.prompt(arm, target);
   const startedAt = new Date().toISOString();
   const result = await ompRun(arm, prompt, sessions);
@@ -320,7 +326,7 @@ async function runOne(
  * re-reads the live issue for its saved target (state persists, so this is the same read-back).
  */
 async function rejudge(): Promise<void> {
-  const scenarios = buildScenarios(loadManifest());
+  const scenarios = [...buildScenarios(loadManifest()), ...buildNightmareScenarios()];
   for (const entry of readdirSync(RUNS, { withFileTypes: true }).filter((item) => item.isDirectory())) {
     const dir = join(RUNS, entry.name);
     for (const name of readdirSync(dir).filter((file) => file.endsWith(".metrics.json"))) {
@@ -370,7 +376,24 @@ function flag(name: string): string | undefined {
   return at === -1 ? undefined : Bun.argv[at + 1];
 }
 
+/** `macro` (default) is s1-s8 on the seeded data; `nightmare` is n01-n15 on the corporate-nightmare data. */
+function scenarioSet(name: string | undefined): Scenario[] {
+  if (name === undefined || name === "macro") {
+    return buildScenarios(loadManifest());
+  }
+  if (name === "nightmare") {
+    return buildNightmareScenarios();
+  }
+  throw new Error(`unknown --set ${name}: use macro or nightmare`);
+}
+
 async function main(): Promise<void> {
+  if (Bun.argv[2] === "list") {
+    for (const scenario of scenarioSet(flag("set"))) {
+      process.stdout.write(`${scenario.id}\t${scenario.write ? "write" : "read"}\t${scenario.name}\n`);
+    }
+    return;
+  }
   setupArms();
   if (Bun.argv[2] === "rejudge") {
     await rejudge();
@@ -382,7 +405,7 @@ async function main(): Promise<void> {
   }
   if (Bun.argv[2] !== "run") {
     throw new Error(
-      "usage: bun eval/run.ts probe | rejudge | run [--rep N] [--arms atl,mcp] [--scenarios id,id] [--tag label] [--sessions]",
+      "usage: bun eval/run.ts probe | rejudge | list [--set macro|nightmare] | run [--set macro|nightmare] [--rep N] [--arms atl,mcp] [--scenarios id,id] [--tag label] [--sessions]",
     );
   }
   const sessions = Bun.argv.includes("--sessions");
@@ -390,10 +413,18 @@ async function main(): Promise<void> {
   if (sessions !== rep >= SESSION_REP) {
     throw new Error(`--sessions runs must use --rep >= ${SESSION_REP}, and only those`);
   }
-  const tag = flag("tag");
+  const set = flag("set");
+  const given = flag("tag");
+  // Nightmare runs always carry a tag, so report.ts (untagged runs = the s1-s8 totals) never mixes them in.
+  const tag = set === "nightmare" ? (given === undefined ? NIGHTMARE_TAG : `${NIGHTMARE_TAG}-${given}`) : given;
   const arms = (flag("arms") ?? ARMS.join(",")).split(",").flatMap((name) => ARMS.filter((arm) => arm === name));
   const wanted = flag("scenarios")?.split(",");
-  const scenarios = buildScenarios(loadManifest()).filter((scenario) => wanted === undefined || wanted.includes(scenario.id));
+  const available = scenarioSet(set);
+  const unknown = wanted?.filter((id) => !available.some((scenario) => scenario.id === id)) ?? [];
+  if (unknown.length > 0) {
+    throw new Error(`unknown scenario ids for set ${set ?? "macro"}: ${unknown.join(", ")}`);
+  }
+  const scenarios = available.filter((scenario) => wanted === undefined || wanted.includes(scenario.id));
   for (const scenario of scenarios) {
     for (const arm of arms) {
       if (existsSync(join(RUNS, tag === undefined ? arm : `${arm}-${tag}`, `${scenario.id}-${rep}.metrics.json`))) {

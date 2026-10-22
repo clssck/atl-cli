@@ -57,7 +57,9 @@ function serve(routes: Record<string, Reply>): void {
       query: url.searchParams,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     });
-    const reply = routes[`${method} ${path}`];
+    const forced = new Headers(init?.headers).has("x-force-accept-language");
+    const reply =
+      (forced ? routes[`EN ${method} ${path}`] : undefined) ?? routes[`${method} ${path}`];
     if (reply === undefined) {
       return Promise.resolve(
         new Response(JSON.stringify({ errorMessages: [`no route ${method} ${path}`] }), {
@@ -390,6 +392,30 @@ describe("--set parsing", () => {
     expect(writes()[0]?.body).toEqual({ fields: { description: adf } });
   });
 
+  test("--set assignee takes an account id, none, or auto and rejects a name Jira would turn into unassigned", async () => {
+    serve({
+      "PUT /rest/api/3/issue/ABC-1": noContent,
+      "GET /rest/api/3/issue/ABC-1": ok(REFRESHED),
+    });
+    const id = "62a219658783e7006f627f3b";
+    await run("issue.edit", { issue: "ABC-1" }, { set: [`assignee=${id}`] });
+    await run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=none"] });
+    await run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=auto"] });
+    await run("issue.edit", { issue: "ABC-1" }, { set: ['assignee={"accountId":"x"}'] });
+    expect(writes().map((w) => w.body)).toEqual([
+      { fields: { assignee: { accountId: id } } },
+      { fields: { assignee: { accountId: null } } },
+      { fields: { assignee: { accountId: "-1" } } },
+      { fields: { assignee: { accountId: "x" } } },
+    ]);
+    sent = [];
+    const error = await failure(
+      run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=nobody"] }),
+    );
+    expect(error.code).toBe("invalid_assignee");
+    expect(sent).toEqual([]);
+  });
+
   test("an entry without field=value is rejected", async () => {
     serve({});
     const error = await failure(run("issue.edit", { issue: "ABC-1" }, { set: ["labels"] }));
@@ -441,7 +467,7 @@ describe("issue.edit", () => {
       key: "ABC-123",
       summary: "New title",
       description: ["Body"],
-      fields: { customfield_10010: "custom" },
+      customfield_10010: "custom",
       url: "https://acme.atlassian.net/browse/ABC-123",
     });
   });
@@ -626,9 +652,8 @@ describe("issue.move", () => {
     expect(writes()).toEqual([]);
   });
 
-  test("sends fields, update and a comment added through update.comment", async () => {
+  test("sends fields and update from files", async () => {
     serve(route);
-    const comment = await file("why.md", "Done because");
     const update = await file("update.json", JSON.stringify({ labels: [{ add: "shipped" }] }));
     const history = await file("history.json", JSON.stringify({ type: "cli" }));
     await run(
@@ -636,7 +661,6 @@ describe("issue.move", () => {
       { issue: "ABC-123", transition: "Resolve" },
       {
         set: ['resolution={"name":"Done"}'],
-        commentFile: comment,
         updateFile: update,
         historyMetadataFile: history,
       },
@@ -644,11 +668,70 @@ describe("issue.move", () => {
     expect(writes()[0]?.body).toEqual({
       transition: { id: "21" },
       fields: { resolution: { name: "Done" } },
-      update: {
-        labels: [{ add: "shipped" }],
-        comment: [{ add: { body: markdownToAdf("Done because") } }],
-      },
+      update: { labels: [{ add: "shipped" }] },
       historyMetadata: { type: "cli" },
+    });
+  });
+
+  test("--comment is posted through the comment API after the transition and its id reported", async () => {
+    serve({ ...route, "POST /rest/api/3/issue/ABC-123/comment": created({ id: "900" }) });
+    const result = await run(
+      "issue.move",
+      { issue: "ABC-123", transition: "Resolve" },
+      { comment: "Done because" },
+    );
+    expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual([
+      "POST /rest/api/3/issue/ABC-123/transitions",
+      "POST /rest/api/3/issue/ABC-123/comment",
+    ]);
+    expect(writes()[0]?.body).toEqual({ transition: { id: "21" } });
+    expect(writes()[1]?.body).toEqual({ body: markdownToAdf("Done because") });
+    expect(result).toMatchObject({ key: "ABC-123", comment: { id: "900" } });
+  });
+
+  test("a failed transition posts no comment; a failed comment says the transition happened", async () => {
+    serve({
+      "GET /rest/api/3/issue/ABC-123/transitions": ok(TRANSITIONS),
+      "POST /rest/api/3/issue/ABC-123/transitions": {
+        status: 400,
+        body: { errorMessages: ["no"] },
+      },
+    });
+    await failure(run("issue.move", { issue: "ABC-123", transition: "Resolve" }, { comment: "x" }));
+    expect(writes().map((w) => w.path)).toEqual(["/rest/api/3/issue/ABC-123/transitions"]);
+
+    sent = [];
+    serve({
+      ...route,
+      "POST /rest/api/3/issue/ABC-123/comment": { status: 403, body: { errorMessages: ["no"] } },
+    });
+    const error = await failure(
+      run("issue.move", { issue: "ABC-123", transition: "Resolve" }, { comment: "x" }),
+    );
+    expect(error.message).toContain("was transitioned, but the comment was not posted");
+    expect(error.next).toEqual([["atl", "issue", "get", "ABC-123"]]);
+  });
+
+  test("--plan resolves the transition, sends no write, and shows the comment as followUp", async () => {
+    serve(route);
+    const plan = await run(
+      "issue.move",
+      { issue: "ABC-123", transition: "Close" },
+      { comment: "why" },
+      {
+        ctx: {
+          plan: true,
+          argv: ["issue", "move", "ABC-123", "Close", "--comment", "why", "--plan"],
+        },
+      },
+    );
+    expect(writes()).toEqual([]);
+    expect(plan).toMatchObject({
+      type: "plan",
+      method: "POST",
+      url: `${API}/rest/api/3/issue/ABC-123/transitions`,
+      followUp: { method: "POST", url: `${API}/rest/api/3/issue/ABC-123/comment` },
+      next: [["atl", "issue", "move", "ABC-123", "Close", "--comment", "why"]],
     });
   });
 
@@ -660,12 +743,58 @@ describe("issue.move", () => {
       {},
       { ctx: { plan: true, argv: ["issue", "move", "ABC-123", "Close", "--plan"] } },
     );
-    expect(sent.map((s) => s.method)).toEqual(["GET"]);
+    expect(writes()).toEqual([]);
     expect(plan).toMatchObject({
       type: "plan",
       method: "POST",
       url: `${API}/rest/api/3/issue/ABC-123/transitions`,
       next: [["atl", "issue", "move", "ABC-123", "Close"]],
+    });
+  });
+
+  describe("localized account", () => {
+    const localized = ok({
+      transitions: [
+        { id: "11", name: "Elintézendő", to: { name: "Teendő" } },
+        { id: "21", name: "Folyamatban", to: { name: "Folyamatban" } },
+      ],
+    });
+    const english = ok({
+      transitions: [
+        { id: "11", name: "To Do", to: { name: "To Do" } },
+        { id: "21", name: "In Progress", to: { name: "In Progress" } },
+      ],
+    });
+    const hungarian = {
+      "GET /rest/api/3/issue/ABC-123/transitions": localized,
+      "EN GET /rest/api/3/issue/ABC-123/transitions": english,
+      "POST /rest/api/3/issue/ABC-123/transitions": noContent,
+    };
+
+    test("localized and English transition and status names resolve to the same transition", async () => {
+      serve(hungarian);
+      for (const wanted of [
+        "Folyamatban",
+        "In Progress",
+        "in progress",
+        "Elintézendő",
+        "To Do",
+        "Teendő",
+      ]) {
+        await run("issue.move", { issue: "ABC-123", transition: wanted });
+      }
+      expect(
+        writes().map(
+          (w) => isRecord(w.body) && isRecord(w.body.transition) && w.body.transition.id,
+        ),
+      ).toEqual(["21", "21", "21", "11", "11", "11"]);
+    });
+
+    test("an unknown name lists both forms", async () => {
+      serve(hungarian);
+      const error = await failure(run("issue.move", { issue: "ABC-123", transition: "Nope" }));
+      expect(error.code).toBe("unknown_transition");
+      expect(error.message).toContain("Elintézendő / To Do (11 -> Teendő / To Do)");
     });
   });
 });
@@ -1002,6 +1131,7 @@ describe("inline and stdin bodies", () => {
         transitions: [{ id: "21", name: "Resolve", to: { name: "Done" } }],
       }),
       "POST /rest/api/3/issue/ABC-123/transitions": noContent,
+      "POST /rest/api/3/issue/ABC-123/comment": created({ id: "900" }),
       "POST /rest/api/3/issue/ABC-123/worklog": created({ id: "1", timeSpent: "1h" }),
       "GET /rest/api/3/issueLinkType": ok({
         issueLinkTypes: [{ id: "1", name: "Blocks", outward: "blocks", inward: "is blocked by" }],
@@ -1013,12 +1143,10 @@ describe("inline and stdin bodies", () => {
     bodyDeps.readStdin = () => Promise.resolve("Same root cause");
     await run("issue.link", { from: "ABC-123", type: "blocks", to: "ABC-2" }, { commentFile: "-" });
     const bodies = writes().map((w) => w.body);
-    expect(bodies[0]).toEqual({
-      transition: { id: "21" },
-      update: { comment: [{ add: { body: markdownToAdf("Shipped") } }] },
-    });
-    expect(bodies[1]).toMatchObject({ timeSpent: "1h", comment: markdownToAdf("Pairing") });
-    expect(bodies[2]).toMatchObject({ comment: { body: markdownToAdf("Same root cause") } });
+    expect(bodies[0]).toEqual({ transition: { id: "21" } });
+    expect(bodies[1]).toEqual({ body: markdownToAdf("Shipped") });
+    expect(bodies[2]).toMatchObject({ timeSpent: "1h", comment: markdownToAdf("Pairing") });
+    expect(bodies[3]).toMatchObject({ comment: { body: markdownToAdf("Same root cause") } });
   });
 
   test("--comment with --comment-file is body_conflict; --comment-file storage is rejected", async () => {
@@ -1047,21 +1175,495 @@ describe("inline and stdin bodies", () => {
 });
 
 describe("parity", () => {
-  test("write commands declare their MCP tools and a write side effect", () => {
-    expect(
-      Object.fromEntries(jiraWriteCommands.map((c) => [c.name, [c.sideEffects, c.mcpTools]])),
-    ).toEqual({
-      "issue.create": ["write", ["createJiraIssue"]],
-      "issue.edit": ["write", ["editJiraIssue"]],
-      "issue.comment": ["write", ["addCommentToJiraIssue"]],
-      "issue.move": ["write", ["transitionJiraIssue"]],
-      "issue.log": ["write", ["addWorklogToJiraIssue"]],
-      "issue.link": ["write", ["createIssueLink"]],
-    });
-  });
-
   test("write command names do not collide with read command names", () => {
     const reads = new Set(jiraCommands.map((c) => c.name));
     expect(jiraWriteCommands.filter((c) => reads.has(c.name))).toEqual([]);
+  });
+});
+
+/** Run a command under `--plan` with the argv a user would have typed. */
+function planCtx(...argv: string[]): Partial<CommandContext> {
+  return { plan: true, argv: [...argv, "--plan"] };
+}
+
+describe("issue.delete", () => {
+  test("without --yes it refuses and sends nothing", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123": noContent });
+    const error = await failure(run("issue.delete", { issue: "ABC-123" }));
+    expect(error.code).toBe("confirmation_required");
+    expect(sent).toEqual([]);
+  });
+
+  test("--yes deletes; --delete-subtasks is sent as the deleteSubtasks query", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123": noContent });
+    expect(await run("issue.delete", { issue: "ABC-123" }, { yes: true })).toEqual({
+      deleted: "ABC-123",
+    });
+    expect(sent[0]?.query.has("deleteSubtasks")).toBe(false);
+
+    sent = [];
+    expect(
+      await run("issue.delete", { issue: "ABC-123" }, { yes: true, deleteSubtasks: true }),
+    ).toEqual({ deleted: "ABC-123", subtasks: "deleted" });
+    expect(sent[0]?.method).toBe("DELETE");
+    expect(sent[0]?.query.get("deleteSubtasks")).toBe("true");
+  });
+
+  test("--plan needs no --yes, sends nothing and its next carries --yes", async () => {
+    serve({});
+    const plan = await run(
+      "issue.delete",
+      { issue: "ABC-123" },
+      { deleteSubtasks: true },
+      { ctx: planCtx("issue", "delete", "ABC-123", "--delete-subtasks") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({
+      type: "plan",
+      method: "DELETE",
+      url: `${API}/rest/api/3/issue/ABC-123?deleteSubtasks=true`,
+      next: [["atl", "issue", "delete", "ABC-123", "--delete-subtasks", "--yes"]],
+    });
+  });
+
+  test("a parent with subtasks is rejected by the API and surfaces as an api error", async () => {
+    serve({
+      "DELETE /rest/api/3/issue/ABC-123": {
+        status: 400,
+        body: { errorMessages: ["has subtasks; specify deleteSubtasks"] },
+      },
+    });
+    const error = await failure(run("issue.delete", { issue: "ABC-123" }, { yes: true }));
+    expect(error.code).toBe("http_400");
+    expect(error.message).toContain("deleteSubtasks");
+  });
+});
+
+describe("issue.comment-delete", () => {
+  test("without --yes it refuses; with --yes it deletes that comment", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123/comment/10050": noContent });
+    const refused = await failure(
+      run("issue.comment-delete", { issue: "ABC-123", commentId: "10050" }),
+    );
+    expect(refused.code).toBe("confirmation_required");
+    expect(sent).toEqual([]);
+
+    expect(
+      await run("issue.comment-delete", { issue: "ABC-123", commentId: "10050" }, { yes: true }),
+    ).toEqual({ deleted: "10050", issue: "ABC-123" });
+    expect(sent.map((s) => `${s.method} ${s.path}`)).toEqual([
+      "DELETE /rest/api/3/issue/ABC-123/comment/10050",
+    ]);
+  });
+
+  test("--plan sends nothing", async () => {
+    serve({});
+    const plan = await run(
+      "issue.comment-delete",
+      { issue: "ABC-123", commentId: "10050" },
+      {},
+      { ctx: planCtx("issue", "comment-delete", "ABC-123", "10050") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({
+      type: "plan",
+      next: [["atl", "issue", "comment-delete", "ABC-123", "10050", "--yes"]],
+    });
+  });
+});
+
+describe("issue.remote-link.add", () => {
+  test("POSTs a web link object with optional globalId, relationship, summary and icon", async () => {
+    serve({
+      "POST /rest/api/3/issue/ABC-123/remotelink": created({ id: 10002, self: "https://x/10002" }),
+    });
+    const result = await run(
+      "issue.remote-link.add",
+      { issue: "ABC-123" },
+      {
+        url: "https://example.com/runbook",
+        title: "Runbook",
+        summary: "How to recover",
+        relationship: "documented in",
+        globalId: "runbook-1",
+        iconUrl: "https://example.com/i.png",
+      },
+    );
+    expect(writes()[0]?.body).toEqual({
+      globalId: "runbook-1",
+      relationship: "documented in",
+      object: {
+        url: "https://example.com/runbook",
+        title: "Runbook",
+        summary: "How to recover",
+        icon: { url16x16: "https://example.com/i.png" },
+      },
+    });
+    expect(result).toEqual({
+      id: "10002",
+      issue: "ABC-123",
+      next: [["atl", "issue", "links", "ABC-123", "--remote"]],
+    });
+  });
+
+  test("the minimal body carries only url and title; --full returns the raw response", async () => {
+    serve({ "POST /rest/api/3/issue/ABC-123/remotelink": created({ id: 7, self: "https://x/7" }) });
+    const result = await run(
+      "issue.remote-link.add",
+      { issue: "ABC-123" },
+      { url: "https://example.com", title: "Example" },
+      { ctx: { full: true } },
+    );
+    expect(writes()[0]?.body).toEqual({ object: { url: "https://example.com", title: "Example" } });
+    expect(result).toEqual({ id: 7, self: "https://x/7" });
+  });
+
+  test("--plan sends nothing", async () => {
+    serve({});
+    const plan = await run(
+      "issue.remote-link.add",
+      { issue: "ABC-123" },
+      { url: "https://example.com", title: "Example" },
+      { ctx: planCtx("issue", "remote-link", "add", "ABC-123") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({ type: "plan", method: "POST" });
+  });
+});
+
+describe("issue.remote-link.delete", () => {
+  test("without --yes it refuses; with --yes it deletes that link id", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123/remotelink/10014": noContent });
+    const refused = await failure(
+      run("issue.remote-link.delete", { issue: "ABC-123", linkId: "10014" }),
+    );
+    expect(refused.code).toBe("confirmation_required");
+    expect(sent).toEqual([]);
+    const result = await run(
+      "issue.remote-link.delete",
+      { issue: "ABC-123", linkId: "10014" },
+      { yes: true },
+    );
+    expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual([
+      "DELETE /rest/api/3/issue/ABC-123/remotelink/10014",
+    ]);
+    expect(result).toMatchObject({ deleted: "10014", issue: "ABC-123" });
+  });
+
+  test("--global-id deletes by the globalId query; a link id and --global-id are exclusive", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123/remotelink": noContent });
+    await run(
+      "issue.remote-link.delete",
+      { issue: "ABC-123" },
+      { globalId: "runbook-1", yes: true },
+    );
+    expect(writes()[0]?.query.get("globalId")).toBe("runbook-1");
+    const neither = await failure(
+      run("issue.remote-link.delete", { issue: "ABC-123" }, { yes: true }),
+    );
+    expect(neither.code).toBe("invalid_selection");
+    const both = await failure(
+      run(
+        "issue.remote-link.delete",
+        { issue: "ABC-123", linkId: "1" },
+        { globalId: "g", yes: true },
+      ),
+    );
+    expect(both.code).toBe("invalid_selection");
+    expect(writes()).toHaveLength(1);
+  });
+
+  test("--plan sends nothing", async () => {
+    serve({});
+    const plan = await run(
+      "issue.remote-link.delete",
+      { issue: "ABC-123", linkId: "10014" },
+      {},
+      { ctx: planCtx("issue", "remote-link", "delete", "ABC-123", "10014") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({ type: "plan", method: "DELETE" });
+  });
+});
+
+describe("property.set", () => {
+  test("PUTs the parsed JSON value to the entity's property path", async () => {
+    serve({
+      "PUT /rest/api/3/issue/ABC-123/properties/team.meta": created(),
+      "PUT /rest/api/3/comment/10050/properties/k": noContent,
+    });
+    const issue = await run(
+      "property.set",
+      { entity: "issue", id: "ABC-123", key: "team.meta" },
+      { value: '{"owner":"web","n":[1,2]}' },
+    );
+    expect(writes()[0]?.body).toEqual({ owner: "web", n: [1, 2] });
+    expect(issue).toEqual({
+      entity: "issue",
+      id: "ABC-123",
+      key: "team.meta",
+      next: [["atl", "property", "get", "issue", "ABC-123", "team.meta"]],
+    });
+
+    await run("property.set", { entity: "comment", id: "10050", key: "k" }, { value: "3" });
+    expect(writes()[1]?.body).toBe(3);
+    await run("property.set", { entity: "comment", id: "10050", key: "k" }, { value: '"text"' });
+    expect(writes()[2]?.body).toBe("text");
+  });
+
+  test("--file supplies the value; worklog and dashboard-item need their extra flags", async () => {
+    serve({
+      "PUT /rest/api/3/issue/ABC-123/worklog/9001/properties/k": noContent,
+      "PUT /rest/api/3/dashboard/10/items/20/properties/k": noContent,
+    });
+    const path = await file("v.json", '{"a":true}');
+    await run(
+      "property.set",
+      { entity: "worklog", id: "9001", key: "k" },
+      { file: path, issue: "ABC-123" },
+    );
+    expect(writes()[0]?.body).toEqual({ a: true });
+    await run(
+      "property.set",
+      { entity: "dashboard-item", id: "10", key: "k" },
+      { value: "null", item: "20" },
+    );
+    expect(writes()[1]?.body).toBeNull();
+
+    const noIssue = await failure(
+      run("property.set", { entity: "worklog", id: "9001", key: "k" }, { value: "1" }),
+    );
+    expect(noIssue.code).toBe("missing_issue");
+    const noItem = await failure(
+      run("property.set", { entity: "dashboard-item", id: "10", key: "k" }, { value: "1" }),
+    );
+    expect(noItem.code).toBe("missing_item");
+  });
+
+  test("path segments are encoded", async () => {
+    serve({ "PUT /rest/api/3/issue/ABC-123/properties/a%2Fb%20c": noContent });
+    await run("property.set", { entity: "issue", id: "ABC-123", key: "a/b c" }, { value: "1" });
+    expect(writes()).toHaveLength(1);
+  });
+
+  test("invalid input is rejected before any request", async () => {
+    serve({});
+    const base = { entity: "issue", id: "ABC-123", key: "k" };
+    expect((await failure(run("property.set", base, { value: "{oops" }))).code).toBe(
+      "invalid_property_value",
+    );
+    expect((await failure(run("property.set", base, {}))).code).toBe("property_value_required");
+    expect((await failure(run("property.set", base, { value: "1", file: "x.json" }))).code).toBe(
+      "property_value_required",
+    );
+    expect(
+      (await failure(run("property.set", { ...base, entity: "user" }, { value: "1" }))).code,
+    ).toBe("invalid_property_entity");
+    expect(
+      (await failure(run("property.set", { ...base, entity: "project" }, { value: "1" }))).code,
+    ).toBe("invalid_property_entity");
+    expect(
+      (await failure(run("property.set", base, { file: join(root, "missing.json") }))).code,
+    ).toBe("input_file_unreadable");
+    expect(sent).toEqual([]);
+  });
+
+  test("--plan describes the PUT and sends nothing", async () => {
+    serve({});
+    const plan = await run(
+      "property.set",
+      { entity: "issue", id: "ABC-123", key: "k" },
+      { value: '{"a":1}' },
+      { ctx: planCtx("property", "set", "issue", "ABC-123", "k", "--value", '{"a":1}') },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({
+      type: "plan",
+      method: "PUT",
+      url: `${API}/rest/api/3/issue/ABC-123/properties/k`,
+      body: { preview: '{"a":1}' },
+    });
+  });
+});
+
+describe("version.related-work.set", () => {
+  test("without --id it creates (POST) with category, title and url", async () => {
+    serve({
+      "POST /rest/api/3/version/10000/relatedwork": ok({
+        relatedWorkId: "rw-1",
+        category: "Design docs",
+        title: "Spec",
+        url: "https://example.com/spec",
+      }),
+    });
+    const result = await run(
+      "version.related-work.set",
+      { version: "10000" },
+      { category: "Design docs", title: "Spec", url: "https://example.com/spec" },
+    );
+    expect(writes()[0]?.body).toEqual({
+      category: "Design docs",
+      title: "Spec",
+      url: "https://example.com/spec",
+    });
+    expect(result).toEqual({
+      id: "rw-1",
+      category: "Design docs",
+      title: "Spec",
+      url: "https://example.com/spec",
+      next: [["atl", "version", "related-work", "list", "10000"]],
+    });
+  });
+
+  test("with --id it updates (PUT) that related work", async () => {
+    serve({
+      "PUT /rest/api/3/version/10000/relatedwork": ok({ relatedWorkId: "rw-1", category: "Other" }),
+    });
+    await run(
+      "version.related-work.set",
+      { version: "10000" },
+      { id: "rw-1", category: "Other", title: "New" },
+    );
+    expect(writes()[0]?.method).toBe("PUT");
+    expect(writes()[0]?.body).toEqual({ category: "Other", relatedWorkId: "rw-1", title: "New" });
+  });
+
+  test("an unknown version is an api error; --plan sends nothing", async () => {
+    serve({});
+    const error = await failure(
+      run("version.related-work.set", { version: "99" }, { category: "Other" }),
+    );
+    expect(error.code).toBe("http_404");
+    sent = [];
+    const plan = await run(
+      "version.related-work.set",
+      { version: "99" },
+      { category: "Other" },
+      { ctx: planCtx("version", "related-work", "set", "99") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({ type: "plan", method: "POST" });
+  });
+});
+
+describe("issue.watch / issue.unwatch", () => {
+  test("watch with no --account sends no body (the caller watches)", async () => {
+    serve({ "POST /rest/api/3/issue/ABC-123/watchers": noContent });
+    expect(await run("issue.watch", { issue: "ABC-123" })).toEqual({
+      issue: "ABC-123",
+      watching: true,
+    });
+    expect(writes()[0]?.body).toBeUndefined();
+  });
+
+  test("watch --account sends the account id as a bare JSON string", async () => {
+    serve({ "POST /rest/api/3/issue/ABC-123/watchers": noContent });
+    expect(await run("issue.watch", { issue: "ABC-123" }, { account: "acc-1" })).toEqual({
+      issue: "ABC-123",
+      watching: true,
+      account: "acc-1",
+    });
+    expect(writes()[0]?.body).toBe("acc-1");
+  });
+
+  test("unwatch --account DELETEs with the accountId query", async () => {
+    serve({ "DELETE /rest/api/3/issue/ABC-123/watchers": noContent });
+    expect(await run("issue.unwatch", { issue: "ABC-123" }, { account: "acc-1" })).toEqual({
+      issue: "ABC-123",
+      watching: false,
+    });
+    expect(sent[0]?.query.get("accountId")).toBe("acc-1");
+  });
+
+  test("unwatch without --account resolves the caller from /me (Jira's /myself needs another scope)", async () => {
+    const urls: string[] = [];
+    jiraDeps.fetch = (input, init) => {
+      urls.push(`${init?.method ?? "GET"} ${input}`);
+      return Promise.resolve(
+        input === "https://api.atlassian.com/me"
+          ? new Response(JSON.stringify({ account_id: "me-1" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(null, { status: 204 }),
+      );
+    };
+    await run("issue.unwatch", { issue: "ABC-123" });
+    expect(urls).toEqual([
+      "GET https://api.atlassian.com/me",
+      `DELETE ${API}/rest/api/3/issue/ABC-123/watchers?accountId=me-1`,
+    ]);
+  });
+
+  test("--plan sends no write", async () => {
+    serve({});
+    const plan = await run(
+      "issue.watch",
+      { issue: "ABC-123" },
+      {},
+      { ctx: planCtx("issue", "watch", "ABC-123") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({ type: "plan", method: "POST" });
+  });
+});
+
+describe("issue.notify", () => {
+  test("maps --to tokens onto the notify recipients object", async () => {
+    serve({ "POST /rest/api/3/issue/ABC-123/notify": noContent });
+    const to = ["reporter", "watchers", "user:acc-1", "user:acc-2", "group:devs"];
+    const result = await run(
+      "issue.notify",
+      { issue: "ABC-123" },
+      { subject: "Deployed", body: "Shipped", htmlBody: "<b>Shipped</b>", to },
+    );
+    expect(writes()[0]?.body).toEqual({
+      subject: "Deployed",
+      textBody: "Shipped",
+      htmlBody: "<b>Shipped</b>",
+      to: {
+        reporter: true,
+        watchers: true,
+        users: [{ accountId: "acc-1" }, { accountId: "acc-2" }],
+        groups: [{ name: "devs" }],
+      },
+    });
+    expect(result).toEqual({ notified: "ABC-123", to });
+  });
+
+  test("an unknown recipient or no recipient fails before any request", async () => {
+    serve({});
+    const bad = await failure(
+      run("issue.notify", { issue: "ABC-123" }, { subject: "s", body: "b", to: ["everyone"] }),
+    );
+    expect(bad.code).toBe("invalid_recipient");
+    const none = await failure(
+      run("issue.notify", { issue: "ABC-123" }, { subject: "s", body: "b", to: [] }),
+    );
+    expect(none.code).toBe("recipients_required");
+    expect(sent).toEqual([]);
+  });
+
+  test("--plan sends nothing; an API rejection surfaces", async () => {
+    serve({});
+    const plan = await run(
+      "issue.notify",
+      { issue: "ABC-123" },
+      { subject: "s", body: "b", to: ["assignee"] },
+      { ctx: planCtx("issue", "notify", "ABC-123") },
+    );
+    expect(sent).toEqual([]);
+    expect(plan).toMatchObject({ type: "plan", method: "POST" });
+
+    serve({
+      "POST /rest/api/3/issue/ABC-123/notify": {
+        status: 400,
+        body: { errorMessages: ["No recipients"] },
+      },
+    });
+    const error = await failure(
+      run("issue.notify", { issue: "ABC-123" }, { subject: "s", body: "b", to: ["assignee"] }),
+    );
+    expect(error.code).toBe("http_400");
   });
 });

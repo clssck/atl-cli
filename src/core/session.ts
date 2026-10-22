@@ -4,9 +4,8 @@ import type { CommandContext } from "./cli.ts";
 import { loadConfig, saveConfig, type SiteEntry } from "./config.ts";
 import { AtlError } from "./errors.ts";
 import { isRecord } from "./guards.ts";
-import { buildUrl, HttpClient, type FetchLike, type Query } from "./http.ts";
+import { API_ORIGIN, buildUrl, HttpClient, type FetchLike, type Query } from "./http.ts";
 
-export const API_ORIGIN = "https://api.atlassian.com";
 const ACCESSIBLE_RESOURCES_URL = `${API_ORIGIN}/oauth/token/accessible-resources`;
 
 export interface Site extends SiteEntry {
@@ -28,6 +27,8 @@ export interface Session {
 export interface SessionOptions {
   /** Site derived from the target itself (page or issue URL); outranks `--site`. */
   siteHint?: string | undefined;
+  /** Cloud id carried by an ARI: selects the accessible site with this id, outranking every host choice. */
+  cloudId?: string | undefined;
   fetch?: FetchLike | undefined;
 }
 
@@ -86,27 +87,31 @@ export async function refreshSites(http: HttpClient, env: NodeJS.ProcessEnv): Pr
 }
 
 /**
- * Pick the site: target hint > `--site` > `ATL_SITE` > config `defaultSite` > the only
- * accessible site. Unknown hosts trigger one accessible-resources refresh.
+ * Pick the site: target cloud id > target hint > `--site` > `ATL_SITE` > config `defaultSite` >
+ * the only accessible site. Unknown hosts or cloud ids trigger one accessible-resources refresh.
  */
 export async function resolveSite(
   ctx: Pick<CommandContext, "site" | "env">,
   http: HttpClient,
   siteHint?: string,
+  cloudId?: string,
 ): Promise<Site> {
   const config = await loadConfig(ctx.env);
   const requested = siteHint ?? ctx.site ?? ctx.env.ATL_SITE ?? config.defaultSite;
   const wanted = requested === undefined ? undefined : parseSite(requested);
+  const wantedCloudId = cloudId?.toLowerCase();
 
   let sites: Site[] = Object.entries(config.sites ?? {}).map(([host, entry]) =>
     Object.assign({ host }, entry),
   );
   const pick = (): Site | undefined =>
-    wanted === undefined
-      ? sites.length === 1
-        ? sites[0]
-        : undefined
-      : sites.find((site) => site.host === wanted);
+    wantedCloudId !== undefined
+      ? sites.find((site) => site.cloudId.toLowerCase() === wantedCloudId)
+      : wanted === undefined
+        ? sites.length === 1
+          ? sites[0]
+          : undefined
+        : sites.find((site) => site.host === wanted);
 
   let site = pick();
   if (site === undefined) {
@@ -117,13 +122,18 @@ export async function resolveSite(
     return site;
   }
 
-  if (wanted !== undefined) {
-    throw new AtlError(`Site ${wanted} is not accessible with the current login`, {
-      code: "site_not_accessible",
-      category: "config",
-      hint: `Accessible sites: ${sites.map((s) => s.host).join(", ") || "none"}`,
-      next: [["atl", "sites"]],
-    });
+  if (wantedCloudId !== undefined || wanted !== undefined) {
+    throw new AtlError(
+      wantedCloudId === undefined
+        ? `Site ${wanted} is not accessible with the current login`
+        : `No accessible site has cloud id ${cloudId}`,
+      {
+        code: "site_not_accessible",
+        category: "config",
+        hint: `Accessible sites: ${sites.map((s) => s.host).join(", ") || "none"}`,
+        next: [["atl", "sites"]],
+      },
+    );
   }
   throw new AtlError(
     sites.length === 0 ? "No accessible Atlassian sites" : "Several sites accessible; pick one",
@@ -144,7 +154,7 @@ export async function openSession(
   options: SessionOptions = {},
 ): Promise<Session> {
   const http = createHttpClient(ctx.env, options.fetch);
-  const site = await resolveSite(ctx, http, options.siteHint);
+  const site = await resolveSite(ctx, http, options.siteHint, options.cloudId);
   const confluenceBase = `${API_ORIGIN}/ex/confluence/${site.cloudId}/wiki`;
   const jiraBase = `${API_ORIGIN}/ex/jira/${site.cloudId}`;
   return {
@@ -154,4 +164,23 @@ export async function openSession(
     jiraUrl: (path, query) => buildUrl(jiraBase, path, query),
     siteUrl: (path) => buildUrl(site.url, path),
   };
+}
+
+/**
+ * The caller's account id from `/me` (scope `read:me`). Jira's `/myself` needs `read:jira-user`,
+ * which the login lacks, so "the current user" always comes from here.
+ */
+export async function currentAccountId(
+  session: Pick<Session, "http">,
+  hint?: string,
+): Promise<string> {
+  const me = await session.http.request({ method: "GET", url: `${API_ORIGIN}/me` });
+  if (isRecord(me) && typeof me.account_id === "string") {
+    return me.account_id;
+  }
+  throw new AtlError("/me returned no account_id", {
+    code: "unexpected_response",
+    category: "api",
+    ...(hint === undefined ? {} : { hint }),
+  });
 }

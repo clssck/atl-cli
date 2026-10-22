@@ -321,7 +321,7 @@ describe("markdownToAdf: blocks", () => {
     ]);
   });
 
-  test("images: external, media placeholder, mid-paragraph split, and heading fallback", () => {
+  test("images: external, media placeholder, inline in a paragraph, and heading fallback", () => {
     expect(first("![alt](https://x.y/i.png)")).toEqual({
       type: "mediaSingle",
       attrs: { layout: "center" },
@@ -334,10 +334,19 @@ describe("markdownToAdf: blocks", () => {
       attrs: { layout: "center" },
       content: [{ type: "media", attrs: { type: "file", id: "abc-1", collection: "contentId-9" } }],
     });
-    expect(blocks("before ![a](https://x.y/i.png) after").map((node) => node.type)).toEqual([
-      "paragraph",
-      "mediaSingle",
-      "paragraph",
+    expect(blocks("before ![a](https://x.y/i.png) after")).toEqual([
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "before " },
+          {
+            type: "text",
+            text: "a",
+            marks: [{ type: "link", attrs: { href: "https://x.y/i.png" } }],
+          },
+          { type: "text", text: " after" },
+        ],
+      },
     ]);
     expect(first("# ![logo](https://x.y/l.png) Title").content).toEqual([
       {
@@ -382,5 +391,170 @@ describe("markdownToAdf: ADF validity", () => {
         expect(node.content?.length ?? 0).toBeGreaterThan(0);
       }
     });
+  });
+});
+
+/** Every ADF child rule these tests defend: where may a block live. */
+function misplaced(nodes: AdfNode[], parent: string, found: string[] = []): string[] {
+  for (const node of nodes) {
+    const inQuote = parent === "blockquote" && (node.type === "table" || node.type === "taskList");
+    const inItem = parent === "listItem" && node.type === "table";
+    const inTask =
+      parent === "taskItem" &&
+      !["text", "hardBreak", "mention", "emoji", "inlineCard", "status", "date"].includes(
+        node.type,
+      );
+    if (inQuote || inItem || inTask) {
+      found.push(`${node.type} in ${parent}`);
+    }
+    misplaced(node.content ?? [], node.type, found);
+  }
+  return found;
+}
+
+const TABLE = "| x | y |\n|---|---|\n| 1 | 2 |";
+
+describe("markdownToAdf: ADF-legal containers", () => {
+  test("a table or task list in a blockquote, and a table in a list item, never nest", () => {
+    for (const markdown of [
+      `> ${TABLE.replaceAll("\n", "\n> ")}`,
+      "> - [ ] t",
+      `- a\n\n  ${TABLE.replaceAll("\n", "\n  ")}`,
+      `> - a\n>\n>   ${TABLE.replaceAll("\n", "\n>   ")}`,
+      `1. a\n\n   ${TABLE.replaceAll("\n", "\n   ")}`,
+      "- [ ] a\n  ```\n  c\n  ```",
+      "- [ ] a\n  > q\n  - b",
+    ]) {
+      expect(misplaced(blocks(markdown), "doc")).toEqual([]);
+    }
+  });
+
+  test("the hoisted block follows the text before it; a quote with only a table is dropped", () => {
+    expect(blocks(`> ${TABLE.replaceAll("\n", "\n> ")}`).map((node) => node.type)).toEqual([
+      "table",
+    ]);
+    expect(blocks("> - [ ] t").map((node) => node.type)).toEqual(["taskList"]);
+    expect(
+      blocks(`> before\n>\n> ${TABLE.replaceAll("\n", "\n> ")}\n>\n> after`).map(
+        (node) => node.type,
+      ),
+    ).toEqual(["blockquote", "table", "blockquote"]);
+    expect(
+      blocks(`- a\n\n  ${TABLE.replaceAll("\n", "\n  ")}\n- b`).map((node) => node.type),
+    ).toEqual(["bulletList", "table", "bulletList"]);
+  });
+
+  test("an ordered list split around a table continues its numbering", () => {
+    const parts = blocks(`1. a\n\n   ${TABLE.replaceAll("\n", "\n   ")}\n2. b`);
+    expect(parts.map((node) => node.type)).toEqual(["orderedList", "table", "orderedList"]);
+    expect(parts[0]?.attrs).toBeUndefined();
+    expect(parts[2]?.attrs).toEqual({ order: 2 });
+  });
+
+  test("a code fence in a task item becomes a code block after the task", () => {
+    const parts = blocks("- [ ] a\n  ```\n  c\n  ```\n- [x] b");
+    expect(parts.map((node) => node.type)).toEqual(["taskList", "codeBlock", "taskList"]);
+    expect(parts[1]?.content).toEqual([{ type: "text", text: "c" }]);
+    expect(parts[0]?.content?.[0]?.content).toEqual([{ type: "text", text: "a" }]);
+  });
+
+  test("a nested plain bullet in a task item stays a bullet; ordered tasks are unnumbered", () => {
+    const parts = blocks("- [ ] a\n  - b");
+    expect(parts.map((node) => node.type)).toEqual(["taskList", "bulletList"]);
+    expect(parts[1]?.content?.[0]?.content?.[0]?.content).toEqual([{ type: "text", text: "b" }]);
+    const ordered = first("1. [ ] x\n2. [x] y");
+    expect(ordered.type).toBe("taskList");
+    expect(ordered.content?.map((item) => item.attrs?.state)).toEqual(["TODO", "DONE"]);
+  });
+});
+
+describe("markdownToAdf: text fidelity", () => {
+  test("tabs inside fenced code survive, at top level and inside a list item", () => {
+    expect(first("```\n\tx\n\ty\tz\n```").content).toEqual([{ type: "text", text: "\tx\n\ty\tz" }]);
+    const list = first("- a\n  ```\n  \tx\n  ```");
+    expect(list.content?.[0]?.content?.[1]?.content).toEqual([{ type: "text", text: "\tx" }]);
+    expect(first("a\tb").content).toEqual([{ type: "text", text: "a\tb" }]);
+  });
+
+  test("an image in a sentence stays in one paragraph; alone it is a block", () => {
+    const one = blocks("Inline image mid-sentence ![mid](https://e.com/i.png) continues.");
+    expect(one).toHaveLength(1);
+    expect(one[0]?.content?.map((node) => node.text)).toEqual([
+      "Inline image mid-sentence ",
+      "mid",
+      " continues.",
+    ]);
+    const many = blocks(
+      "Image: ![a](https://e/a.png) and ![b](https://e/b.png) and ![](https://e/c.png).",
+    );
+    expect(many).toHaveLength(1);
+    expect(many[0]?.content?.map((node) => node.text)).toEqual([
+      "Image: ",
+      "a",
+      " and ",
+      "b",
+      " and ",
+      "https://e/c.png",
+      ".",
+    ]);
+    expect(blocks("![a](https://e/a.png) ![b](https://e/b.png)").map((node) => node.type)).toEqual([
+      "mediaSingle",
+      "mediaSingle",
+    ]);
+    const file = first("see ![f](media:abc-1?collection=c-9) here");
+    expect(file.content?.[1]).toEqual({
+      type: "mediaInline",
+      attrs: { type: "file", id: "abc-1", collection: "c-9" },
+    });
+  });
+
+  test("an image inside a link keeps the link", () => {
+    const linked = first("[![l](https://e/i.png)](https://x.example)");
+    expect(linked).toEqual({
+      type: "mediaSingle",
+      attrs: { layout: "center" },
+      content: [
+        {
+          type: "media",
+          attrs: { type: "external", url: "https://e/i.png", alt: "l" },
+          marks: [{ type: "link", attrs: { href: "https://x.example" } }],
+        },
+      ],
+    });
+    expect(first("go [![l](https://e/i.png)](https://x.example) now").content?.[1]).toEqual({
+      type: "text",
+      text: "l",
+      marks: [{ type: "link", attrs: { href: "https://x.example" } }],
+    });
+  });
+
+  test("bare URLs with parentheses are linked whole; an escaped scheme stays text", () => {
+    const wiki = first("See https://en.wikipedia.org/wiki/Foo_(bar) end.").content;
+    expect(wiki).toEqual([
+      { type: "text", text: "See " },
+      {
+        type: "text",
+        text: "https://en.wikipedia.org/wiki/Foo_(bar)",
+        marks: [{ type: "link", attrs: { href: "https://en.wikipedia.org/wiki/Foo_(bar)" } }],
+      },
+      { type: "text", text: " end." },
+    ]);
+    expect(first("https://e.com/(x)").content?.[0]?.marks).toEqual([
+      { type: "link", attrs: { href: "https://e.com/(x)" } },
+    ]);
+    expect(first("(see https://e.com/a_(b)).").content?.[1]?.text).toBe("https://e.com/a_(b)");
+    expect(first("https\\://x.y/(z)").content).toEqual([{ type: "text", text: "https://x.y/(z)" }]);
+  });
+
+  test("sub, sup and underline tags become marks; links without a destination are text", () => {
+    expect(first("H<sub>2</sub>O <u>u</u> x<sup>2</sup>").content).toEqual([
+      { type: "text", text: "H" },
+      { type: "text", text: "2", marks: [{ type: "subsup", attrs: { type: "sub" } }] },
+      { type: "text", text: "O " },
+      { type: "text", text: "u", marks: [{ type: "underline" }] },
+      { type: "text", text: " x" },
+      { type: "text", text: "2", marks: [{ type: "subsup", attrs: { type: "sup" } }] },
+    ]);
+    expect(first("[x]() and [y](<a b>)").content).toEqual([{ type: "text", text: "x and y" }]);
   });
 });

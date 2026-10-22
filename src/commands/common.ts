@@ -1,5 +1,7 @@
 import { Type } from "../core/schema.ts";
 import { adfToMarkdown, parseAdfBody, type AdfDoc } from "../adf/index.ts";
+import { AtlError, inputError } from "../core/errors.ts";
+import { isRecord } from "../core/guards.ts";
 import type { PagePolicy } from "../core/paginate.ts";
 import { withSource } from "../core/output.ts";
 
@@ -157,4 +159,36 @@ export function renderAdf(
 /** ISO 8601 without sub-second precision: `2026-10-21T20:31:57.000Z` becomes `...:57Z`; offsets are kept. */
 export function shortTs(value: string | null | undefined): string | undefined {
   return value?.replace(/(T\d\d:\d\d:\d\d)\.\d+/, "$1");
+}
+
+/** CQL/JQL string literal: double-quoted with `\` and `"` escaped (control characters become JSON escapes both languages accept). */
+export function queryLiteral(value: string): string {
+  return JSON.stringify(value);
+}
+
+/** Read a `--*-file` flag holding one JSON object; every failure is an `input` error naming the flag. */
+export async function readJsonObject(path: string, flag: string): Promise<Record<string, unknown>> {
+  const text = await Bun.file(path)
+    .text()
+    .catch((cause: unknown) => {
+      throw new AtlError(`Cannot read ${flag} ${path}`, {
+        code: "input_file_unreadable",
+        category: "input",
+        cause,
+      });
+    });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    throw new AtlError(`${flag} ${path} is not valid JSON`, {
+      code: "invalid_json_file",
+      category: "input",
+      cause,
+    });
+  }
+  if (!isRecord(parsed)) {
+    throw inputError("invalid_json_file", `${flag} ${path} must contain a JSON object`);
+  }
+  return parsed;
 }

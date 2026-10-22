@@ -6,13 +6,15 @@ import {
   type CommandInput,
   type CommandSpec,
 } from "../core/cli.ts";
-import { AtlError, type NextCommand } from "../core/errors.ts";
+import { AtlError, inputError } from "../core/errors.ts";
 import { isRecord } from "../core/guards.ts";
 import type { FetchLike } from "../core/http.ts";
 import { keepRaw } from "../core/output.ts";
 import { openSession } from "../core/session.ts";
-import { withMcpClient, type McpTool } from "../mcp/client.ts";
-import { applyArgv } from "./write.ts";
+import { check } from "../core/validate.ts";
+import { withMcpClient, type McpClient, type McpTool, type McpToolResult } from "../mcp/client.ts";
+import { authStatus } from "../auth/index.ts";
+import { applyArgvFor, requireYes } from "./write.ts";
 
 export const mcpGroups: Readonly<Record<string, string>> = {
   mcp: "Atlassian MCP parity tooling: list tools, call any tool (escape hatch)",
@@ -30,6 +32,22 @@ export const mcpDeps: {
 
 function clientOptions(ctx: CommandContext) {
   return { env: ctx.env, fetch: mcpDeps.fetch };
+}
+
+/**
+ * The MCP filters its tool list and catalog by the token's scopes, so a snapshot taken with a
+ * login made for another resource is silently smaller. An env token's resource is unknown.
+ */
+async function requireLoginFor(ctx: CommandContext, endpoint: string): Promise<void> {
+  const status = await authStatus({ env: ctx.env });
+  if (status.source !== "stored" || status.resource === endpoint) {
+    return;
+  }
+  throw inputError(
+    "resource_mismatch",
+    `This login is for ${status.resource}, not ${endpoint}; a snapshot would only show what its scopes allow`,
+    `Log in to a throwaway config dir first: ATL_CONFIG_DIR=<dir> atl auth login --resource ${endpoint}`,
+  );
 }
 
 async function readJsonFile(path: string, flag: string): Promise<unknown> {
@@ -88,7 +106,14 @@ const ToolsFlags = Type.Object({
   names: Type.Optional(Type.Boolean({ description: "Print only tool names" })),
   snapshot: Type.Optional(
     Type.Boolean({
-      description: "Emit the mcp/tools-v1.json snapshot shape (use with --output)",
+      description:
+        "Emit the mcp/tools-v1.json / mcp/tools-v2.json snapshot shape for the configured endpoint (use with --output)",
+    }),
+  ),
+  catalog: Type.Optional(
+    Type.Boolean({
+      description:
+        "Emit the mcp/operations-v2.json shape: every discover-only operation of the v2 endpoint (use with --output)",
     }),
   ),
 });
@@ -113,6 +138,142 @@ function snapshotOf(
   };
 }
 
+/** Parallel `discover` calls while building the operation catalog. */
+const DISCOVER_CONCURRENCY = 8;
+const SUMMARY_MAX_CHARS = 200;
+
+const DiscoverResult = Type.Object({
+  name: Type.String(),
+  product: Type.String(),
+  executeTool: Type.String(),
+  description: Type.String(),
+  inputs: Type.Array(
+    Type.Object({ name: Type.String(), type: Type.String(), required: Type.Boolean() }),
+  ),
+});
+
+interface CatalogOperation {
+  name: string;
+  product: string;
+  executeTool: string;
+  description: string;
+  inputs: { name: string; type: string; required: boolean }[];
+}
+
+/** First sentence of a description, whitespace collapsed, cut to 200 characters. */
+function summary(description: string): string {
+  const text = description.replaceAll(/\s+/g, " ").trim();
+  const end = /[.!?](?=\s+[^\sa-z]|$)/.exec(text);
+  const sentence = end === null ? text : text.slice(0, end.index + 1);
+  return sentence.length <= SUMMARY_MAX_CHARS
+    ? sentence
+    : `${sentence.slice(0, SUMMARY_MAX_CHARS - 3)}...`;
+}
+
+/** The `results` of a `discover` call; its text is one JSON line, then an optional "also matched" list. */
+function discoverResults(result: McpToolResult): unknown[] {
+  const [first] = result.content;
+  let payload = first;
+  if (typeof first === "string") {
+    try {
+      payload = JSON.parse(first.split("\n", 1)[0] ?? "");
+    } catch {
+      payload = undefined;
+    }
+  }
+  if (!isRecord(payload) || !Array.isArray(payload.results)) {
+    throw new AtlError("MCP discover returned an unexpected result", {
+      code: "mcp_protocol_error",
+      category: "api",
+    });
+  }
+  return payload.results;
+}
+
+/** Look up one operation by its exact name; `undefined` when discover does not return it in full. */
+async function discoverOperation(
+  client: McpClient,
+  name: string,
+): Promise<CatalogOperation | undefined> {
+  const found = discoverResults(await client.callTool("discover", { query: name })).find(
+    (result) => isRecord(result) && result.name === name,
+  );
+  if (found === undefined) {
+    return undefined;
+  }
+  if (!check(DiscoverResult, found)) {
+    throw new AtlError(`MCP discover returned an unexpected record for ${name}`, {
+      code: "mcp_protocol_error",
+      category: "api",
+    });
+  }
+  return {
+    name,
+    product: found.product,
+    executeTool: found.executeTool,
+    description: summary(found.description),
+    inputs: found.inputs.map((input) => ({
+      name: input.name,
+      type: input.type,
+      required: input.required,
+    })),
+  };
+}
+
+/**
+ * The mcp/operations-v2.json catalog: every operation that `?tools=all` lists beyond the primary
+ * tools, described by `discover` (the only source of `product`), sorted by product and name.
+ */
+async function operationCatalog(ctx: CommandContext): Promise<Record<string, unknown>> {
+  const options = clientOptions(ctx);
+  return withMcpClient(options, async (client) => {
+    await requireLoginFor(ctx, client.endpoint);
+    const primary = new Set((await client.listTools()).map((tool) => tool.name));
+    if (!primary.has("discover")) {
+      throw inputError(
+        "catalog_unsupported",
+        `${client.endpoint} has no discover tool; --catalog needs the MCP v2 endpoint`,
+        "Run with ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp and a login made with `atl auth login --resource https://mcp.atlassian.com/v2/mcp`.",
+      );
+    }
+    const everything = new URL(client.endpoint);
+    everything.searchParams.set("tools", "all");
+    const listed = await withMcpClient({ ...options, endpoint: everything.href }, (all) =>
+      all.listTools(),
+    );
+    const queue = listed.map((tool) => tool.name).filter((name) => !primary.has(name));
+    const operations: CatalogOperation[] = [];
+    const missing: string[] = [];
+    const worker = async (): Promise<void> => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        const operation = await discoverOperation(client, name);
+        if (operation === undefined) {
+          missing.push(name);
+        } else {
+          operations.push(operation);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: DISCOVER_CONCURRENCY }, () => worker()));
+    if (missing.length > 0) {
+      throw new AtlError(
+        `discover did not return ${missing.length} operation(s) by name: ${missing.toSorted().join(", ")}`,
+        { code: "catalog_incomplete", category: "api" },
+      );
+    }
+    // Plain code-unit order (names are ASCII and unique), not locale order: it matches the committed file.
+    operations.sort((a, b) =>
+      a.product === b.product ? (a.name < b.name ? -1 : 1) : a.product < b.product ? -1 : 1,
+    );
+    return {
+      generatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      endpoint: client.endpoint,
+      count: operations.length,
+      operations,
+    };
+  });
+}
+
 const mcpTools = defineCommand({
   name: "mcp.tools",
   summary: "List the tools the Atlassian MCP server offers",
@@ -124,13 +285,25 @@ const mcpTools = defineCommand({
     "atl mcp tools --names",
     "atl mcp tools --full --fields name,inputSchema",
     "atl mcp tools --snapshot --pretty --output mcp/tools-v1.json",
+    "ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp atl mcp tools --snapshot --output mcp/tools-v2.json",
+    "ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp atl mcp tools --catalog --pretty --output mcp/operations-v2.json",
   ],
-  run: (ctx, input) =>
-    withMcpClient(clientOptions(ctx), async (client, init) => {
-      const tools = await client.listTools();
-      if (input.flags.snapshot === true) {
-        return keepRaw(snapshotOf(client.endpoint, init, tools));
+  run: async (ctx, input) => {
+    if (input.flags.catalog === true) {
+      if (input.flags.snapshot === true || input.flags.names === true) {
+        throw inputError(
+          "conflicting_flags",
+          "--catalog cannot be combined with --snapshot or --names",
+        );
       }
+      return keepRaw(await operationCatalog(ctx));
+    }
+    return withMcpClient(clientOptions(ctx), async (client, init) => {
+      if (input.flags.snapshot === true) {
+        await requireLoginFor(ctx, client.endpoint);
+        return keepRaw(snapshotOf(client.endpoint, init, await client.listTools()));
+      }
+      const tools = await client.listTools();
       if (input.flags.names === true) {
         return { items: tools.map((tool) => tool.name) };
       }
@@ -144,7 +317,8 @@ const mcpTools = defineCommand({
           required: requiredArgs(tool),
         })),
       };
-    }),
+    });
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -246,18 +420,9 @@ async function runMcpCall(
       return keepRaw(await client.callTool(name, args));
     }
     if (ctx.plan) {
-      const base = applyArgv(ctx.argv);
-      const apply: NextCommand = base.includes("--yes") ? base : [...base, "--yes"];
-      return { type: "plan", tool: name, arguments: args, next: [apply] };
+      return { type: "plan", tool: name, arguments: args, next: [applyArgvFor(ctx, true)] };
     }
-    if (flags.yes !== true) {
-      throw new AtlError(`${name} changes data and needs confirmation`, {
-        code: "confirmation_required",
-        category: "input",
-        hint: "Preview with --plan, then re-run with --yes.",
-        next: [["atl", ...ctx.argv, "--plan"]],
-      });
-    }
+    requireYes(ctx, flags.yes, name);
     return keepRaw(await client.callTool(name, args));
   });
 }

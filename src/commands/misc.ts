@@ -1,7 +1,8 @@
 import { Type } from "../core/schema.ts";
+import { COMMENT_LOOKUP_KIND_FLAG } from "./confluence.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
 import { AtlError } from "../core/errors.ts";
-import { parseAnyRef } from "../resolve/index.ts";
+import { parseAnyRef, parseDisplayLink } from "../resolve/index.ts";
 
 // ---------------------------------------------------------------------------
 // get
@@ -24,9 +25,7 @@ const GetFlags = Type.Object({
       description: "Body format: markdown (default), raw ADF, or storage XHTML (Confluence pages)",
     }),
   ),
-  inline: Type.Optional(
-    Type.Boolean({ description: "A Confluence comment reference is an inline comment" }),
-  ),
+  kind: COMMENT_LOOKUP_KIND_FLAG,
   comments: Type.Optional(
     Type.Integer({
       minimum: 0,
@@ -52,8 +51,17 @@ const get = defineCommand({
   async run(ctx, input) {
     const text = input.args.ref ?? "";
     const { flags } = input;
-    const parsed = parseAnyRef(text);
+    const parsed = parseDisplayLink(text) === undefined ? parseAnyRef(text) : undefined;
     const format = flags.format === undefined ? {} : { format: flags.format };
+
+    if (parsed === undefined) {
+      // A legacy /display/ link names a page by title; page.get resolves it.
+      return await target(ctx, "page.get").run(ctx, {
+        args: { page: text },
+        rest: [],
+        flags: format,
+      });
+    }
 
     if (
       flags.format === "storage" &&
@@ -78,7 +86,7 @@ const get = defineCommand({
       return await target(ctx, "comment.get").run(ctx, {
         args: { comment: text },
         rest: [],
-        flags: { ...format, ...(flags.inline === undefined ? {} : { inline: flags.inline }) },
+        flags: { ...format, ...(flags.kind === undefined ? {} : { kind: flags.kind }) },
       });
     }
     return await target(ctx, "page.get").run(ctx, {
@@ -107,27 +115,35 @@ const MARKDOWN_TO_ADF: Record<string, string> = {
   "- item / * item": "bulletList > listItem",
   "1. item": "orderedList > listItem",
   "- [ ] todo / - [x] done":
-    "taskList > taskItem with state TODO / DONE; nested lists become nested taskLists",
-  "> quote": "blockquote; headings and rules inside become bold paragraphs",
-  "```lang\ncode\n```": "codeBlock with attrs.language when a language is given",
+    "taskList > taskItem with state TODO / DONE; nested task items become nested taskLists; a code fence, table or plain nested list inside a task item follows it as its own block; there is no numbering (1. [ ] x is an unordered task)",
+  "> quote":
+    "blockquote; headings and rules inside become bold paragraphs; a table or task list inside follows the quote (ADF forbids it inside)",
+  "```lang\ncode\n```": "codeBlock with attrs.language when a language is given; tabs are kept",
   "---": "rule",
   "| a | b |\n| --- | --- |\n| 1 | 2 |":
-    "table; the first row becomes tableHeader cells, the rest tableCell",
+    "table; the first row becomes tableHeader cells, the rest tableCell; a table inside a list item follows the list item",
   "![alt](https://host/img.png)":
-    "mediaSingle > media (type external, url, alt); inside headings and task items it becomes a link",
+    "mediaSingle > media (type external, url, alt) when alone in its paragraph; inside text it stays inline as a link on the alt text; in headings and task items it is a link",
+  "[![alt](https://host/img.png)](https://url)": "the media keeps the link as a link mark",
   "![alt](media:<id>?collection=<c>)":
-    "mediaSingle > media (type file, id, collection); reuses an existing attachment",
-  "raw HTML (other than <br>)": "kept as literal text, not interpreted",
+    "mediaSingle > media (type file, id, collection); reuses an existing attachment; inside text it becomes mediaInline",
+  "https://host/a_(b)":
+    "text with mark link; bare http(s) URLs are linked, balanced parentheses included",
+  "[text]() / [text](<a b>)": "plain text without a link (empty or whitespace destination)",
+  "<sub>x</sub> / <sup>x</sup> / <u>x</u>": "text with mark subsup (sub / sup) / underline",
+  "other raw HTML (not <br>, <sub>, <sup>, <u>)": "kept as literal text, not interpreted",
 };
 
 const ADF_TO_MARKDOWN: Record<string, string> = {
   heading: "# ... ######",
   "strong / em / strike / code / link marks": "**x** / *x* / ~~x~~ / `x` / [x](url)",
-  "underline, subsup, textColor and other marks without markdown syntax": "plain text",
+  "<u>x</u> / <sub>x</sub> / <sup>x</sup>":
+    "underline / subsup marks (textColor and other marks have no syntax: plain text)",
   "bulletList / orderedList": "- item / 1. item",
   "taskList > taskItem": "- [ ] / - [x]",
   "decisionList > decisionItem": "- [decision] text",
-  table: "GFM pipe table; the first row is the header, cell line breaks become <br>",
+  table:
+    "GFM pipe table; the first row is the header, cell line breaks become <br>; a merged cell (colspan/rowspan) repeats its text in each position it covers",
   codeBlock: "fenced block with the language",
   blockquote: "> quote",
   "panel (info, note, warning, error, success)":
@@ -140,8 +156,10 @@ const ADF_TO_MARKDOWN: Record<string, string> = {
   date: "YYYY-MM-DD",
   "inlineCard / blockCard / embedCard": "<url> autolink, or [url](url) when the URL has spaces",
   "media / mediaSingle / mediaGroup / mediaInline":
-    "![alt or file](media:<id>?collection=<c>) placeholder; external media keeps its URL",
-  "extension / inlineExtension (macros)": "<!-- macro:<key> -->",
+    "![alt or file](media:<id>?collection=<c>) placeholder; external media keeps its URL (empty alt stays empty) and its link as [![alt](src)](href)",
+  extension:
+    "<!-- macro:<key> -->; legacy-content (a table or task list Confluence kept as a macro) renders its content",
+  "inlineExtension (macros)": "<!-- macro:<key> -->",
   bodiedExtension: "<!-- macro:<key> --> body <!-- /macro:<key> -->",
   "unknown node": "its children, or <!-- adf:<type> --> when it has none",
 };

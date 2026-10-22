@@ -1,7 +1,6 @@
 import { AtlError } from "./errors.ts";
 import { isRecord } from "./guards.ts";
-import { mapHttpError, type HttpClient } from "./http.ts";
-import { API_ORIGIN } from "./session.ts";
+import { API_ORIGIN, mapHttpError, type HttpClient } from "./http.ts";
 
 export const GRAPHQL_URL = `${API_ORIGIN}/graphql`;
 
@@ -119,4 +118,13 @@ export async function graphql(
     throw toError(request.operationName, fatal);
   }
   return { data, partialErrors: errors.map((error) => error.message) };
+}
+
+/** A GraphQL `pageInfo` as the token page `paginateJiraToken` follows (`endCursor` is the next token). */
+export function tokenPage(pageInfo: unknown): { isLast: boolean; nextPageToken?: string } {
+  const info = isRecord(pageInfo) ? pageInfo : {};
+  const endCursor = typeof info.endCursor === "string" ? info.endCursor : undefined;
+  return info.hasNextPage === true && endCursor !== undefined
+    ? { isLast: false, nextPageToken: endCursor }
+    : { isLast: true };
 }

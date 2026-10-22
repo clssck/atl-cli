@@ -164,7 +164,10 @@ const ownFields = defineCommand({
   name: "own.fields",
   summary: "Owns --fields",
   args: [],
-  flags: Type.Object({ fields: Type.Optional(Type.String()) }),
+  flags: Type.Object({
+    fields: Type.Optional(Type.String()),
+    version: Type.Optional(Type.Integer()),
+  }),
   sideEffects: "none",
   examples: [],
   run(_ctx, input) {
@@ -373,6 +376,16 @@ describe("global flags", () => {
     expect(parseArgv(["--version"], makeRegistry(), {})).toEqual({ kind: "version" });
     expect(parseArgv(["thing", "-V"], makeRegistry(), {})).toEqual({ kind: "version" });
   });
+
+  test("a command declaring `version` owns --version; -V and other commands still print the version", () => {
+    const owned = parseArgv(["own", "fields", "--version", "3"], makeRegistry(), {});
+    expect(owned).toMatchObject({ kind: "run", input: { flags: { version: 3 } } });
+    expect(parseArgv(["own", "fields", "-V"], makeRegistry(), {})).toEqual({ kind: "version" });
+    expect(parseArgv(["thing", "get", "1", "--version"], makeRegistry(), {})).toEqual({
+      kind: "version",
+    });
+    expect(parseArgv(["nope", "--version"], makeRegistry(), {})).toEqual({ kind: "version" });
+  });
 });
 
 async function runAtl(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -459,6 +472,21 @@ describe("runCli", () => {
     });
   });
 
+  test("--fields keeps every item, and warns on stderr about paths that match nothing", async () => {
+    const { stdout, stderr, code } = await runAtl(["echo", "--fields", "items.fields.a,nope"]);
+    expect(code).toBe(0);
+    const parsed: unknown = JSON.parse(stdout);
+    expect(parsed).toMatchObject({ items: [{ fields: { a: "x" } }, { fields: { a: "z" } }] });
+    expect(JSON.parse(stderr)).toEqual({
+      type: "warning",
+      code: "fields_unmatched",
+      paths: ["nope"],
+      hint: expect.stringContaining("--fields"),
+    });
+    const none = await runAtl(["echo", "--fields", "nope"]);
+    expect(JSON.parse(none.stdout)).toMatchObject({ items: [{}, {}] });
+  });
+
   test("compact output omits null values; --full prints the result as returned", async () => {
     const compact = JSON.parse((await runAtl(["echo"])).stdout);
     expect(compact).not.toHaveProperty("nextCursor");
@@ -477,7 +505,6 @@ describe("runCli", () => {
       "ctx",
     ]);
     expect(JSON.parse(stdout)).toEqual({
-      items: [{}, {}],
       nextCursor: null,
       ctx: { site: "acme", plan: true, full: true },
     });

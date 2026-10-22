@@ -1,8 +1,7 @@
 import { Type } from "../core/schema.ts";
 import { parseAdfBody, type AdfDoc, type AdfNode } from "../adf/index.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
-import { AtlError, type NextCommand } from "../core/errors.ts";
-import { isRecord } from "../core/guards.ts";
+import { AtlError, inputError, type NextCommand } from "../core/errors.ts";
 import type { Session } from "../core/session.ts";
 import {
   ADF_BODY,
@@ -10,65 +9,82 @@ import {
   commentTarget,
   commentUrl,
   contentTarget,
-  INLINE_FLAG,
+  commentGetArgv,
+  COMMENT_KIND_FLAG,
   openConfluence,
   resolveSpaceId,
   spaceSiteHint,
+  TYPE_FLAG,
+  displayNames,
   webUrl,
   type ApiComment,
   type ApiPage,
   type CommentKind,
   type ContentBase,
 } from "./confluence.ts";
+import { shortTs } from "./common.ts";
+import { writeDiagnostic } from "../core/output.ts";
 import {
-  applyArgv,
+  applyArgvFor,
   BODY_FLAGS,
   confluenceBody,
+  isPlan,
   loadBody,
   planOrSend,
   requireBody,
+  requireYes,
+  YES_FLAG,
+  type LoadedBody,
   type Plan,
   type PlannedRequest,
 } from "./write.ts";
 
-function isPlan(value: unknown): value is Plan {
-  return isRecord(value) && value.type === "plan";
-}
-
-function inputError(message: string, code: string, hint?: string): AtlError {
-  return new AtlError(message, {
-    code,
-    category: "input",
-    ...(hint === undefined ? {} : { hint }),
-  });
-}
-
 /**
  * Send (or plan) one write. A 409 from an update means the version moved since it was read: it is
- * surfaced as transient with a re-read `next`, never retried.
+ * surfaced as transient with a re-read `next`, never retried. A destructive write's plan `next`
+ * carries `--yes`, since the plan itself was allowed without it. `notFoundHint` replaces the generic
+ * 404 hint where a 404 does not mean a wrong id.
  */
 async function sendWrite<T>(
   ctx: CommandContext,
   session: Session,
   request: PlannedRequest,
-  reread?: NextCommand,
+  options: { reread?: NextCommand; destructive?: boolean; notFoundHint?: string } = {},
 ): Promise<T | Plan> {
+  const next = applyArgvFor(ctx, options.destructive === true);
   try {
-    return await planOrSend<T>(ctx, session.http, request, [applyArgv(ctx.argv)]);
+    return await planOrSend<T>(ctx, session.http, request, [next]);
   } catch (error) {
-    if (reread !== undefined && error instanceof AtlError && error.status === 409) {
+    if (options.notFoundHint !== undefined && error instanceof AtlError && error.status === 404) {
+      throw new AtlError(error.message, {
+        code: error.code,
+        category: error.category,
+        status: 404,
+        hint: options.notFoundHint,
+        next: error.next,
+        cause: error,
+      });
+    }
+    if (options.reread !== undefined && error instanceof AtlError && error.status === 409) {
       throw new AtlError(error.message, {
         code: "version_conflict",
         category: "transient",
         status: 409,
         hint: "The content changed since it was read: re-read it and retry with the current version.",
-        next: [reread],
+        next: [options.reread],
         cause: error,
       });
     }
     throw error;
   }
 }
+
+/**
+ * Confluence answers 404 (not 403) when the caller may not change restrictions, and the page
+ * restriction endpoints are absent on some plans, so the id is rarely the problem.
+ */
+const RESTRICTION_NOT_FOUND_HINT =
+  "Not found for this account: the id is usually fine. The caller needs permission to change restrictions on the content (see `atl page operations <id>`), the token needs the restriction scope, and the site plan must support page restrictions.";
 
 function currentVersion(current: { version?: { number?: number } }, what: string): number {
   const number = current.version?.number;
@@ -112,22 +128,66 @@ function compactPage(session: Session, page: ApiPage, base: ContentBase): Record
   };
 }
 
+/**
+ * `parentId` is the comment a reply was addressed to: the create response names the thread's
+ * top-level comment for a reply to a reply, while `comment get` reports the true parent.
+ */
 function compactWrittenComment(
   session: Session,
   comment: ApiComment,
   kind: CommentKind,
+  parentId?: string,
 ): Record<string, unknown> {
   return {
     id: comment.id,
     type: `${kind}-comment`,
     pageId: comment.pageId ?? comment.blogPostId,
-    parentCommentId: comment.parentCommentId,
+    parentCommentId: parentId ?? comment.parentCommentId,
     status: comment.status === "current" ? undefined : comment.status,
     version: comment.version?.number,
     resolutionStatus: kind === "inline" ? comment.resolutionStatus : undefined,
     url: commentUrl(session, comment),
-    next: [["atl", "comment", "get", comment.id, ...(kind === "inline" ? ["--inline"] : [])]],
+    next: [commentGetArgv(comment.id, kind)],
   };
+}
+
+/** Ids of the inline-comment anchors (`annotation` marks) in an ADF tree. */
+function annotationIds(nodes: readonly AdfNode[] | undefined, found: Set<string>): Set<string> {
+  for (const node of nodes ?? []) {
+    for (const mark of node.marks ?? []) {
+      const id = mark.attrs?.id;
+      if (mark.type === "annotation" && typeof id === "string") {
+        found.add(id);
+      }
+    }
+    annotationIds(node.content, found);
+  }
+  return found;
+}
+
+/**
+ * Inline-comment anchors in the current body that a replacement body lacks. Markdown cannot carry
+ * annotation marks, so a markdown rewrite loses every anchor; ADF and storage bodies keep the ones
+ * they include (storage names them `ac:inline-comment-marker ac:ref`).
+ */
+function droppedAnchors(
+  current: { atlas_doc_format?: { value?: string } } | undefined,
+  replacement: LoadedBody,
+): string[] {
+  const value = current?.atlas_doc_format?.value;
+  if (value === undefined) {
+    return [];
+  }
+  const kept =
+    replacement.kind === "adf"
+      ? annotationIds(replacement.doc.content, new Set())
+      : new Set(
+          Array.from(
+            replacement.value.matchAll(/<ac:inline-comment-marker\b[^>]*\bac:ref="([^"]+)"/g),
+            (match) => match[1],
+          ),
+        );
+  return [...annotationIds(parseAdfBody(value).content, new Set())].filter((id) => !kept.has(id));
 }
 
 const CONTAINER_TYPE_FLAG = Type.Optional(
@@ -165,7 +225,7 @@ const PageCreateFlags = Type.Object({
 export const pageCreate = defineCommand({
   name: "page.create",
   summary: "Create a page or blog post from --body text or a --file (or stdin)",
-  mcpTools: ["createConfluencePage"],
+  mcpTools: ["createConfluencePage", "createConfluenceContent"],
   args: [],
   flags: PageCreateFlags,
   sideEffects: "write",
@@ -180,8 +240,8 @@ export const pageCreate = defineCommand({
     const base: ContentBase = flags.type === "blogpost" ? "blogposts" : "pages";
     if (base === "blogposts" && (flags.parent !== undefined || flags.subtype !== undefined)) {
       throw inputError(
-        "--parent and --subtype only apply to pages; blog posts have no hierarchy",
         "unsupported_for_blogpost",
+        "--parent and --subtype only apply to pages; blog posts have no hierarchy",
       );
     }
     const parent = flags.parent === undefined ? undefined : contentTarget(flags.parent, "page");
@@ -222,13 +282,18 @@ const PageUpdateFlags = Type.Object({
     Type.String({ description: "Space key, id, or URL; the API rejects moves to another space" }),
   ),
   message: Type.Optional(Type.String({ description: "Version message" })),
+  force: Type.Optional(
+    Type.Boolean({
+      description: "Save a body that drops inline-comment anchors present in the current version",
+    }),
+  ),
   type: CONTAINER_TYPE_FLAG,
 });
 
 export const pageUpdate = defineCommand({
   name: "page.update",
   summary: "Update a page or blog post: replace the body, rename, move, or publish",
-  mcpTools: ["updateConfluencePage"],
+  mcpTools: ["updateConfluencePage", "updateConfluenceContent"],
   args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
   flags: PageUpdateFlags,
   sideEffects: "write",
@@ -242,8 +307,8 @@ export const pageUpdate = defineCommand({
     const target = contentTarget(input.args.page ?? "", flags.type);
     if (target.base === "blogposts" && flags.parent !== undefined) {
       throw inputError(
-        "--parent only applies to pages; blog posts have no hierarchy",
         "unsupported_for_blogpost",
+        "--parent only applies to pages; blog posts have no hierarchy",
       );
     }
     if (
@@ -255,8 +320,8 @@ export const pageUpdate = defineCommand({
       flags.space === undefined
     ) {
       throw inputError(
-        "Nothing to update",
         "nothing_to_update",
+        "Nothing to update",
         "Pass --body, --file, --title, --status, --parent or --space",
       );
     }
@@ -271,16 +336,29 @@ export const pageUpdate = defineCommand({
     const spaceId =
       flags.space === undefined ? undefined : await resolveSpaceId(session, flags.space);
     const url = session.confluenceUrl(`/api/v2/${target.base}/${encodeURIComponent(target.id)}`);
-    const current = await session.http.request<ApiPage>({
-      method: "GET",
-      url,
-      ...(loaded === undefined ? { query: ADF_BODY } : {}),
-    });
+    const current = await session.http.request<ApiPage>({ method: "GET", url, query: ADF_BODY });
     const title = flags.title ?? current.title;
     if (title === undefined) {
       throw new AtlError(`Page ${target.id} came back without a title`, {
         code: "unexpected_response",
         category: "api",
+      });
+    }
+    const dropped = loaded === undefined ? [] : droppedAnchors(current.body, loaded);
+    if (dropped.length > 0) {
+      const message = `The new body drops ${dropped.length} inline-comment anchor(s): ${dropped.join(", ")}; their comments stay but lose their text selection`;
+      if (flags.force !== true && !ctx.plan) {
+        throw inputError(
+          "inline_comment_anchors_dropped",
+          message,
+          "Pass --force to save anyway, or edit the ADF (page get --format adf) so the annotation marks are kept; markdown cannot carry them.",
+        );
+      }
+      writeDiagnostic({
+        type: "warning",
+        code: "inline_comment_anchors_dropped",
+        message,
+        ...(ctx.plan ? { hint: "Running this update needs --force" } : {}),
       });
     }
     // Omitted --status keeps the current one. v2 wants version 1 when saving a draft and when
@@ -312,15 +390,23 @@ export const pageUpdate = defineCommand({
           },
         },
       },
-      [
-        "atl",
-        "page",
-        "get",
-        target.id,
-        ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
-      ],
+      {
+        reread: [
+          "atl",
+          "page",
+          "get",
+          target.id,
+          ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
+        ],
+      },
     );
-    return isPlan(updated) ? updated : compactPage(session, updated, target.base);
+    if (isPlan(updated)) {
+      return dropped.length > 0 ? { ...updated, droppedInlineComments: dropped } : updated;
+    }
+    return {
+      ...compactPage(session, updated, target.base),
+      droppedInlineComments: dropped.length > 0 ? dropped : undefined,
+    };
   },
 });
 
@@ -381,19 +467,64 @@ export function locateSelection(
   }
   if (count === 0) {
     throw inputError(
-      `The page text does not contain ${JSON.stringify(selection)}`,
       "selection_not_found",
+      `The page text does not contain ${JSON.stringify(selection)}`,
       "--select must match the page text exactly, within one paragraph or block",
     );
   }
   if (match > count) {
     throw inputError(
-      `--match ${match} is out of range: ${JSON.stringify(selection)} appears ${count} time${count === 1 ? "" : "s"}`,
       "match_out_of_range",
+      `--match ${match} is out of range: ${JSON.stringify(selection)} appears ${count} time${count === 1 ? "" : "s"}`,
       `Use --match 1 to ${count}`,
     );
   }
   return { count, index: match - 1 };
+}
+
+const COMMENT_ADD_KIND_FLAG = Type.Optional(
+  Type.Union([Type.Literal("footer"), Type.Literal("inline")], {
+    description: "Comment kind (default footer); a reply takes its parent's kind",
+  }),
+);
+
+/**
+ * The kind a reply must have: its parent's. Posting to the other endpoint creates a comment that
+ * no list shows under the thread, so the parent is looked up (the requested kind first, then the
+ * other) and a --kind that contradicts it is an input error.
+ */
+async function replyKind(
+  session: Session,
+  parentId: string,
+  requested: CommentKind | undefined,
+): Promise<CommentKind> {
+  const order: CommentKind[] = requested === "inline" ? ["inline", "footer"] : ["footer", "inline"];
+  for (const candidate of order) {
+    try {
+      await session.http.request<ApiComment>({
+        method: "GET",
+        url: session.confluenceUrl(`${commentPath(candidate)}/${encodeURIComponent(parentId)}`),
+      });
+    } catch (error) {
+      if (error instanceof AtlError && error.status === 404) {
+        continue;
+      }
+      throw error;
+    }
+    if (requested !== undefined && candidate !== requested) {
+      throw inputError(
+        "comment_kind_mismatch",
+        `Comment ${parentId} is of kind ${candidate}, not ${requested}`,
+        `Drop --kind (a reply takes its parent's kind) or pass --kind ${candidate}`,
+      );
+    }
+    return candidate;
+  }
+  throw new AtlError(`Comment ${parentId} was not found as a footer or inline comment`, {
+    code: "comment_not_found",
+    category: "api",
+    hint: "Check the comment id, or that --site points at the right site.",
+  });
 }
 
 const CommentAddFlags = Type.Object({
@@ -401,7 +532,7 @@ const CommentAddFlags = Type.Object({
   replyTo: Type.Optional(
     Type.String({ description: "Comment id (or URL with focusedCommentId) to reply to" }),
   ),
-  inline: INLINE_FLAG,
+  kind: COMMENT_ADD_KIND_FLAG,
   select: Type.Optional(
     Type.String({ description: "Exact page text to anchor a top-level inline comment to" }),
   ),
@@ -430,7 +561,11 @@ const CommentAddFlags = Type.Object({
 export const commentAdd = defineCommand({
   name: "comment.add",
   summary: "Add a footer or inline comment, or reply to a comment",
-  mcpTools: ["createConfluenceFooterComment", "createConfluenceInlineComment"],
+  mcpTools: [
+    "createConfluenceFooterComment",
+    "createConfluenceInlineComment",
+    "createConfluenceComment",
+  ],
   args: [
     {
       name: "target",
@@ -443,11 +578,11 @@ export const commentAdd = defineCommand({
   examples: [
     'atl comment add 123456 --body "Deployed to staging"',
     "atl comment add --reply-to 789 --file reply.md",
-    "atl comment add 123456 --inline --select 'rollback window' --match 2 --file note.md --plan",
+    "atl comment add 123456 --kind inline --select 'rollback window' --match 2 --file note.md --plan",
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const kind: CommentKind = flags.inline === true ? "inline" : "footer";
+    const kind: CommentKind = flags.kind ?? "footer";
     const targetArg = input.args.target;
     const targetType = flags.targetType ?? "page";
 
@@ -459,38 +594,38 @@ export const commentAdd = defineCommand({
         flags.targetType !== undefined
       ) {
         throw inputError(
-          "A reply takes only --reply-to; <target>, --select, --match and --target-type do not apply",
           "invalid_flag_combination",
+          "A reply takes only --reply-to; <target>, --select, --match and --target-type do not apply",
           "Drop the target: the parent comment already pins the page",
         );
       }
     } else {
       if (targetArg === undefined || targetArg.trim() === "") {
         throw inputError(
-          "Missing <target>: the page, blog post, attachment, or custom content to comment on",
           "missing_target",
+          "Missing <target>: the page, blog post, attachment, or custom content to comment on",
           "Pass a target, or --reply-to <commentId> to reply",
         );
       }
       if (kind === "inline") {
         if (flags.select === undefined) {
           throw inputError(
-            "An inline comment needs --select <exact page text>",
             "missing_flag",
-            "Add --select, or drop --inline for a footer comment",
+            "An inline comment needs --select <exact page text>",
+            "Add --select, or drop --kind inline for a footer comment",
           );
         }
         if (targetType === "attachment" || targetType === "custom-content") {
           throw inputError(
-            `Inline comments attach to pages and blog posts, not ${targetType}`,
             "invalid_flag_combination",
+            `Inline comments attach to pages and blog posts, not ${targetType}`,
           );
         }
       } else if (flags.select !== undefined || flags.match !== undefined) {
         throw inputError(
-          "--select and --match only apply to inline comments",
           "invalid_flag_combination",
-          "Add --inline",
+          "--select and --match only apply to inline comments",
+          "Add --kind inline",
         );
       }
     }
@@ -503,8 +638,10 @@ export const commentAdd = defineCommand({
         : undefined;
     const session = await openConfluence(ctx, reply?.site ?? page?.site);
 
+    let postKind = kind;
     let anchor: Record<string, unknown> = {};
     if (reply !== undefined) {
+      postKind = await replyKind(session, reply.id, flags.kind);
       anchor = { parentCommentId: reply.id };
     } else if (page !== undefined) {
       anchor = { [page.base === "blogposts" ? "blogPostId" : "pageId"]: page.id };
@@ -543,10 +680,10 @@ export const commentAdd = defineCommand({
 
     const created = await sendWrite<ApiComment>(ctx, session, {
       method: "POST",
-      url: session.confluenceUrl(commentPath(kind)),
+      url: session.confluenceUrl(commentPath(postKind)),
       body: { ...anchor, body: confluenceBody(body) },
     });
-    return isPlan(created) ? created : compactWrittenComment(session, created, kind);
+    return isPlan(created) ? created : compactWrittenComment(session, created, postKind, reply?.id);
   },
 });
 
@@ -556,13 +693,14 @@ export const commentAdd = defineCommand({
 
 const CommentUpdateFlags = Type.Object({
   ...BODY_FLAGS,
-  inline: INLINE_FLAG,
+  kind: COMMENT_KIND_FLAG,
   resolve: Type.Optional(Type.Boolean({ description: "Resolve the inline comment" })),
   reopen: Type.Optional(Type.Boolean({ description: "Reopen a resolved inline comment" })),
 });
 
 export const commentUpdate = defineCommand({
   name: "comment.update",
+  mcpTools: ["updateConfluenceComment", "updateConfluenceCommentResolution"],
   summary: "Edit a comment's body, or resolve or reopen an inline comment",
   args: [
     { name: "comment", description: "Comment id or URL with focusedCommentId", required: true },
@@ -572,27 +710,27 @@ export const commentUpdate = defineCommand({
   examples: [
     'atl comment update 789 --body "Fixed the typo"',
     "atl comment update 789 --file fixed.md",
-    "atl comment update 790 --inline --file fixed.md --plan",
-    "atl comment update 790 --inline --resolve",
+    "atl comment update 790 --kind inline --file fixed.md --plan",
+    "atl comment update 790 --kind inline --resolve",
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const kind: CommentKind = flags.inline === true ? "inline" : "footer";
+    const kind: CommentKind = flags.kind ?? "footer";
     if (flags.resolve === true && flags.reopen === true) {
-      throw inputError("--resolve and --reopen are mutually exclusive", "invalid_flag_combination");
+      throw inputError("invalid_flag_combination", "--resolve and --reopen are mutually exclusive");
     }
     const resolution = flags.resolve === true ? true : flags.reopen === true ? false : undefined;
     if (resolution !== undefined && kind !== "inline") {
       throw inputError(
-        "--resolve and --reopen only apply to inline comments",
         "invalid_flag_combination",
-        "Add --inline",
+        "--resolve and --reopen only apply to inline comments",
+        "Add --kind inline",
       );
     }
     if (flags.file === undefined && flags.body === undefined && resolution === undefined) {
       throw inputError(
-        "Nothing to update",
         "nothing_to_update",
+        "Nothing to update",
         "Pass --body, --file, --resolve or --reopen",
       );
     }
@@ -620,15 +758,838 @@ export const commentUpdate = defineCommand({
           ...(resolution === undefined ? {} : { resolved: resolution }),
         },
       },
-      ["atl", "comment", "get", target.id, ...(kind === "inline" ? ["--inline"] : [])],
+      {
+        reread: commentGetArgv(target.id, kind),
+      },
     );
     return isPlan(updated) ? updated : compactWrittenComment(session, updated, kind);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// page.move
+// ---------------------------------------------------------------------------
+
+/** A page reference; blog posts have no hierarchy, so move/copy parents must be pages. */
+function pageRef(
+  input: string,
+  what: string,
+): { base: ContentBase; id: string; site: string | undefined } {
+  const ref = contentTarget(input, "page");
+  if (ref.base === "blogposts") {
+    throw inputError(
+      "unsupported_for_blogpost",
+      `${what} must be a page; blog posts have no hierarchy`,
+    );
+  }
+  return ref;
+}
+
+/**
+ * Where a page ended up: its parent `{id, title}` and its 0-based `index` among the parent's
+ * children (omitted past the first 250). A folder or space-root parent has no page title or child
+ * listing to read.
+ */
+async function placement(session: Session, pageId: string): Promise<Record<string, unknown>> {
+  const page = await session.http.request<ApiPage & { parentType?: string }>({
+    method: "GET",
+    url: session.confluenceUrl(`/api/v2/pages/${encodeURIComponent(pageId)}`),
+  });
+  if (page.parentId === undefined) {
+    return {};
+  }
+  if (page.parentType !== undefined && page.parentType !== "page") {
+    return { parent: { id: page.parentId, type: page.parentType } };
+  }
+  const parentUrl = session.confluenceUrl(`/api/v2/pages/${encodeURIComponent(page.parentId)}`);
+  const [parent, siblings] = await Promise.all([
+    session.http.request<ApiPage>({ method: "GET", url: parentUrl }),
+    session.http.request<{ results?: { id: string }[] }>({
+      method: "GET",
+      url: `${parentUrl}/direct-children`,
+      query: { limit: 250 },
+    }),
+  ]);
+  const index = siblings.results?.findIndex((child) => child.id === pageId) ?? -1;
+  return {
+    parent: { id: page.parentId, title: parent.title },
+    index: index < 0 ? undefined : index,
+  };
+}
+
+const PageMoveFlags = Type.Object({
+  to: Type.String({ description: "Target page: id, URL, tiny link, or ARI" }),
+  position: Type.Optional(
+    Type.Union([Type.Literal("append"), Type.Literal("before"), Type.Literal("after")], {
+      description:
+        "append: become the last child of the target (default); before/after: become its sibling",
+    }),
+  ),
+});
+
+export const pageMove = defineCommand({
+  name: "page.move",
+  summary: "Move a page under a target page, or before/after it as a sibling",
+  mcpTools: ["moveConfluenceContent"],
+  args: [{ name: "page", description: "Page to move: id, URL, tiny link, or ARI", required: true }],
+  flags: PageMoveFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page move 123456 --to 777",
+    "atl page move 123456 --to 777 --position after",
+    "atl page move 123456 --to 777 --position before --plan",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const source = pageRef(input.args.page ?? "", "The page to move");
+    const target = pageRef(flags.to, "--to");
+    const position = flags.position ?? "append";
+    const session = await openConfluence(ctx, source.site ?? target.site);
+    const moved = await sendWrite<unknown>(ctx, session, {
+      method: "PUT",
+      url: session.confluenceUrl(
+        `/rest/api/content/${encodeURIComponent(source.id)}/move/${position}/${encodeURIComponent(target.id)}`,
+      ),
+    });
+    if (isPlan(moved) || ctx.full) {
+      return moved;
+    }
+    return {
+      id: source.id,
+      position,
+      target: target.id,
+      ...(await placement(session, source.id)),
+      next: [["atl", "page", "get", source.id]],
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// page.copy
+// ---------------------------------------------------------------------------
+
+const PageCopyFlags = Type.Object({
+  title: Type.Optional(
+    Type.String({ description: "Title of the copy (default: Copy of <original title>)" }),
+  ),
+  toParent: Type.Optional(
+    Type.String({
+      description:
+        "Parent for the copy: page id, URL, tiny link, or ARI (default: the original's parent; pages only)",
+    }),
+  ),
+  toSpace: Type.Optional(
+    Type.String({
+      description:
+        "Destination space key, id, or URL (default: the --to-parent's space, else the original's)",
+    }),
+  ),
+  type: TYPE_FLAG,
+});
+
+export const pageCopy = defineCommand({
+  name: "page.copy",
+  summary: "Copy a page or blog post body to a new page, optionally under another parent or space",
+  mcpTools: ["copyConfluenceContent"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: PageCopyFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page copy 123456 --title 'Runbook (draft)'",
+    "atl page copy 123456 --to-parent 777 --title 'Runbook v2'",
+    "atl page copy 123456 --to-space OPS --title 'Runbook' --plan",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const source = contentTarget(input.args.page ?? "", flags.type);
+    if (source.base === "blogposts" && flags.toParent !== undefined) {
+      throw inputError(
+        "unsupported_for_blogpost",
+        "--to-parent only applies to pages; blog posts have no hierarchy",
+      );
+    }
+    const parent =
+      flags.toParent === undefined ? undefined : pageRef(flags.toParent, "--to-parent");
+    const session = await openConfluence(
+      ctx,
+      source.site ??
+        parent?.site ??
+        (flags.toSpace === undefined ? undefined : spaceSiteHint(flags.toSpace)),
+    );
+    const original = await session.http.request<ApiPage>({
+      method: "GET",
+      url: session.confluenceUrl(`/api/v2/${source.base}/${encodeURIComponent(source.id)}`),
+      query: ADF_BODY,
+    });
+    const title =
+      flags.title ?? (original.title === undefined ? undefined : `Copy of ${original.title}`);
+    const value = original.body?.atlas_doc_format?.value;
+    if (title === undefined || value === undefined) {
+      throw new AtlError(`${source.id} came back without a title or readable body to copy`, {
+        code: "unexpected_response",
+        category: "api",
+        hint: "Pass --title; a page without a readable body cannot be copied.",
+      });
+    }
+    // Without --to-space the copy lands in the parent's space; without either, beside the original.
+    let spaceId: string | undefined;
+    let parentId: string | undefined;
+    if (flags.toSpace !== undefined) {
+      spaceId = await resolveSpaceId(session, flags.toSpace);
+      parentId = parent?.id;
+    } else if (parent !== undefined) {
+      const parentPage = await session.http.request<ApiPage>({
+        method: "GET",
+        url: session.confluenceUrl(`/api/v2/pages/${encodeURIComponent(parent.id)}`),
+      });
+      spaceId = parentPage.spaceId;
+      parentId = parent.id;
+    } else {
+      spaceId = original.spaceId;
+      parentId = source.base === "blogposts" ? undefined : original.parentId;
+    }
+    if (spaceId === undefined) {
+      throw new AtlError("Could not determine the destination space", {
+        code: "unexpected_response",
+        category: "api",
+        hint: "Pass --to-space.",
+      });
+    }
+    const created = await sendWrite<ApiPage>(ctx, session, {
+      method: "POST",
+      url: session.confluenceUrl(`/api/v2/${source.base}`),
+      body: {
+        spaceId,
+        status: "current",
+        title,
+        parentId,
+        body: { representation: "atlas_doc_format", value },
+      },
+    });
+    if (isPlan(created) || ctx.full) {
+      return created;
+    }
+    return {
+      ...compactPage(session, created, source.base),
+      copiedFrom: source.id,
+      ...(source.base === "blogposts" ? {} : await placement(session, created.id)),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// page.restore
+// ---------------------------------------------------------------------------
+
+const PageRestoreFlags = Type.Object({
+  version: Type.Integer({
+    minimum: 1,
+    description: "Version number to restore (see page versions)",
+  }),
+  message: Type.Optional(Type.String({ description: "Version message for the new version" })),
+  restoreTitle: Type.Optional(
+    Type.Boolean({ description: "Also restore the title of that version (default: keep current)" }),
+  ),
+  type: TYPE_FLAG,
+});
+
+export const pageRestore = defineCommand({
+  name: "page.restore",
+  summary: "Restore an earlier version of a page or blog post as a new latest version",
+  mcpTools: ["restoreConfluenceContentVersion"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: PageRestoreFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page restore 123456 --version 3",
+    "atl page restore 123456 --version 3 --message 'Undo bad edit' --restore-title",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const target = contentTarget(input.args.page ?? "", flags.type);
+    const session = await openConfluence(ctx, target.site);
+    const url = session.confluenceUrl(`/api/v2/${target.base}/${encodeURIComponent(target.id)}`);
+    const current = await session.http.request<ApiPage>({ method: "GET", url });
+    const old = await session.http.request<ApiPage>({
+      method: "GET",
+      url,
+      query: { ...ADF_BODY, version: flags.version },
+    });
+    const value = old.body?.atlas_doc_format?.value;
+    const title = flags.restoreTitle === true ? old.title : current.title;
+    if (value === undefined || title === undefined) {
+      throw new AtlError(`Version ${flags.version} of ${target.id} has no readable body or title`, {
+        code: "unexpected_response",
+        category: "api",
+      });
+    }
+    const restored = await sendWrite<ApiPage>(
+      ctx,
+      session,
+      {
+        method: "PUT",
+        url,
+        body: {
+          id: target.id,
+          status: "current",
+          title,
+          body: { representation: "atlas_doc_format", value },
+          version: {
+            number: currentVersion(current, `Page ${target.id}`) + 1,
+            message: flags.message ?? `Restored version ${flags.version}`,
+          },
+        },
+      },
+      {
+        reread: [
+          "atl",
+          "page",
+          "get",
+          target.id,
+          ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
+        ],
+      },
+    );
+    if (isPlan(restored) || ctx.full) {
+      return restored;
+    }
+    return { ...compactPage(session, restored, target.base), restoredFrom: flags.version };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// page.permissions.add | set | remove, page.restrict
+// ---------------------------------------------------------------------------
+
+interface ApiPermission {
+  operation?: string;
+  principal?: { principalType?: string; principalId?: string };
+}
+
+interface ApiPermissionList {
+  results?: ApiPermission[];
+  _links?: { next?: string };
+}
+
+interface ApiRestrictionState {
+  state?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
+const SELF_LOCKOUT_FLAG = Type.Optional(
+  Type.Boolean({ description: "Allow a change that removes your own edit access" }),
+);
+
+const GRANT_FLAGS = {
+  viewUser: Type.Optional(
+    Type.Array(Type.String(), { description: "Account id that may view; repeatable" }),
+  ),
+  editUser: Type.Optional(
+    Type.Array(Type.String(), { description: "Account id that may view and edit; repeatable" }),
+  ),
+  viewGroup: Type.Optional(
+    Type.Array(Type.String(), { description: "Group id that may view; repeatable" }),
+  ),
+  editGroup: Type.Optional(
+    Type.Array(Type.String(), { description: "Group id that may view and edit; repeatable" }),
+  ),
+  allowSelfLockout: SELF_LOCKOUT_FLAG,
+  type: TYPE_FLAG,
+};
+
+interface GrantFlags {
+  viewUser?: readonly string[] | undefined;
+  editUser?: readonly string[] | undefined;
+  viewGroup?: readonly string[] | undefined;
+  editGroup?: readonly string[] | undefined;
+  allowSelfLockout?: boolean | undefined;
+  type?: "page" | "blogpost" | undefined;
+  yes?: boolean | undefined;
+}
+
+function principalsOf(
+  principalType: string,
+  ids: readonly string[] | undefined,
+): { principalType: string; principalId: string }[] {
+  return (ids ?? []).map((principalId) => ({ principalType, principalId }));
+}
+
+/** The v2 permissions body: grants grouped by operation (`read` = view, `update` = view and edit). */
+function grantsBody(flags: GrantFlags): {
+  permissions: {
+    operation: string;
+    principals: { principalType: string; principalId: string }[];
+  }[];
+} {
+  const permissions = [
+    {
+      operation: "read",
+      principals: [
+        ...principalsOf("user", flags.viewUser),
+        ...principalsOf("group", flags.viewGroup),
+      ],
+    },
+    {
+      operation: "update",
+      principals: [
+        ...principalsOf("user", flags.editUser),
+        ...principalsOf("group", flags.editGroup),
+      ],
+    },
+  ].filter((grant) => grant.principals.length > 0);
+  if (permissions.length === 0) {
+    throw inputError(
+      "no_principals",
+      "No principals given",
+      "Pass --view-user, --edit-user, --view-group or --edit-group (repeatable).",
+    );
+  }
+  return { permissions };
+}
+
+function lockoutQuery(allow: boolean | undefined): { query?: { "allow-self-lockout": true } } {
+  return allow === true ? { query: { "allow-self-lockout": true } } : {};
+}
+
+function permissionsNext(target: { base: ContentBase; id: string }): readonly string[] {
+  return [
+    "atl",
+    "page",
+    "permissions",
+    "list",
+    target.id,
+    ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
+  ];
+}
+
+/** Grants as `{operation, type, id, name}`; user names come from one bulk lookup. */
+async function compactPermissions(
+  session: Session,
+  target: { base: ContentBase; id: string },
+  list: ApiPermissionList,
+): Promise<Record<string, unknown>> {
+  const results = list.results ?? [];
+  const names = await displayNames(
+    session,
+    results.map((grant) =>
+      grant.principal?.principalType === "user" ? grant.principal.principalId : undefined,
+    ),
+  );
+  return {
+    id: target.id,
+    permissions: results.map((grant) => {
+      const id = grant.principal?.principalId;
+      const name = id === undefined ? undefined : names.get(id);
+      return {
+        operation: grant.operation,
+        type: grant.principal?.principalType,
+        id,
+        name: name === id ? undefined : name,
+      };
+    }),
+    more: list._links?.next === undefined ? undefined : true,
+    next: [permissionsNext(target)],
+  };
+}
+
+async function writeGrants(
+  ctx: CommandContext,
+  pageArg: string,
+  flags: GrantFlags,
+  method: "POST" | "PUT",
+): Promise<unknown> {
+  const target = contentTarget(pageArg, flags.type);
+  const body = grantsBody(flags);
+  const replace = method === "PUT";
+  if (replace) {
+    requireYes(ctx, flags.yes, `Replacing all permissions on ${target.id}`);
+  }
+  const session = await openConfluence(ctx, target.site);
+  const written = await sendWrite<ApiPermissionList>(
+    ctx,
+    session,
+    {
+      method,
+      url: session.confluenceUrl(
+        `/api/v2/${target.base}/${encodeURIComponent(target.id)}/permissions`,
+      ),
+      ...lockoutQuery(flags.allowSelfLockout),
+      body,
+    },
+    { destructive: replace, notFoundHint: RESTRICTION_NOT_FOUND_HINT },
+  );
+  return isPlan(written) || ctx.full ? written : compactPermissions(session, target, written);
+}
+
+export const pagePermissionsAdd = defineCommand({
+  name: "page.permissions.add",
+  summary:
+    "Grant view or edit permission to users and groups, keeping other grants (a principal holds one level)",
+  mcpTools: ["addConfluenceContentPermissions"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: Type.Object(GRANT_FLAGS),
+  sideEffects: "write",
+  examples: [
+    "atl page permissions add 123456 --edit-user 5b10ac8d82e05b22cc7d4ef5",
+    "atl page permissions add 123456 --view-user 5b10a... --view-group 9f2c... --plan",
+  ],
+  run: (ctx, input) => writeGrants(ctx, input.args.page ?? "", input.flags, "POST"),
+});
+
+export const pagePermissionsSet = defineCommand({
+  name: "page.permissions.set",
+  summary: "Replace ALL direct permissions on a page with the given grants (needs --yes)",
+  mcpTools: ["replaceConfluenceContentPermissions"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: Type.Object({ ...GRANT_FLAGS, yes: YES_FLAG }),
+  sideEffects: "write",
+  examples: [
+    "atl page permissions set 123456 --edit-user 5b10ac8d82e05b22cc7d4ef5 --plan",
+    "atl page permissions set 123456 --edit-user 5b10a... --view-group 9f2c... --yes",
+  ],
+  run: (ctx, input) => writeGrants(ctx, input.args.page ?? "", input.flags, "PUT"),
+});
+
+const PermissionsRemoveFlags = Type.Object({
+  user: Type.Optional(Type.String({ description: "Account id whose grant is removed" })),
+  group: Type.Optional(Type.String({ description: "Group id whose grant is removed" })),
+  operation: Type.Optional(
+    Type.Union([Type.Literal("read"), Type.Literal("update")], {
+      description: "Only remove the grant when it has this level (read = view, update = edit)",
+    }),
+  ),
+  all: Type.Optional(Type.Boolean({ description: "Remove every direct permission on the page" })),
+  allowSelfLockout: SELF_LOCKOUT_FLAG,
+  yes: YES_FLAG,
+  type: TYPE_FLAG,
+});
+
+export const pagePermissionsRemove = defineCommand({
+  name: "page.permissions.remove",
+  summary:
+    "Remove one user's or group's direct permission, or all of them with --all (needs --yes)",
+  mcpTools: ["removeConfluenceContentPermissions"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: PermissionsRemoveFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page permissions remove 123456 --user 5b10ac8d82e05b22cc7d4ef5 --yes",
+    "atl page permissions remove 123456 --group 9f2c... --operation update --plan",
+    "atl page permissions remove 123456 --all --plan",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const principal =
+      flags.user !== undefined
+        ? { "principal-type": "user", "principal-id": flags.user }
+        : flags.group !== undefined
+          ? { "principal-type": "group", "principal-id": flags.group }
+          : undefined;
+    if (flags.user !== undefined && flags.group !== undefined) {
+      throw inputError("conflicting_flags", "Pass --user or --group, not both");
+    }
+    if ((principal === undefined) === (flags.all !== true)) {
+      throw inputError(
+        principal === undefined ? "nothing_to_remove" : "conflicting_flags",
+        principal === undefined
+          ? "Nothing to remove"
+          : "--all cannot be combined with --user/--group",
+        principal === undefined ? "Pass --user, --group, or --all." : undefined,
+      );
+    }
+    if (flags.operation !== undefined && principal === undefined) {
+      throw inputError("operation_needs_principal", "--operation needs --user or --group");
+    }
+    const target = contentTarget(input.args.page ?? "", flags.type);
+    requireYes(
+      ctx,
+      flags.yes,
+      principal === undefined
+        ? `Removing all permissions from ${target.id}`
+        : `Removing ${flags.user ?? flags.group ?? ""}'s permission from ${target.id}`,
+    );
+    const session = await openConfluence(ctx, target.site);
+    const removed = await sendWrite<unknown>(
+      ctx,
+      session,
+      {
+        method: "DELETE",
+        url: session.confluenceUrl(
+          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/permissions`,
+        ),
+        query: {
+          ...principal,
+          ...(flags.operation === undefined ? {} : { operation: flags.operation }),
+          ...(flags.allowSelfLockout === true ? { "allow-self-lockout": true } : {}),
+        },
+      },
+      { destructive: true, notFoundHint: RESTRICTION_NOT_FOUND_HINT },
+    );
+    if (isPlan(removed)) {
+      return removed;
+    }
+    return {
+      id: target.id,
+      removed:
+        principal === undefined
+          ? "all"
+          : `${principal["principal-type"]}:${principal["principal-id"]}`,
+      operation: flags.operation,
+      next: [permissionsNext(target)],
+    };
+  },
+});
+
+const RESTRICTION_STATES = ["open", "edit-restricted", "view-restricted"] as const;
+
+const PageRestrictFlags = Type.Object({
+  state: Type.Union(
+    RESTRICTION_STATES.map((state) => Type.Literal(state)),
+    {
+      description:
+        "open: no direct restrictions; edit-restricted: only granted principals edit; view-restricted: only granted principals view and edit",
+    },
+  ),
+  allowSelfLockout: SELF_LOCKOUT_FLAG,
+  yes: YES_FLAG,
+  type: TYPE_FLAG,
+});
+
+export const pageRestrict = defineCommand({
+  name: "page.restrict",
+  summary:
+    "Set a page's direct restriction state: open, edit-restricted, or view-restricted (needs --yes)",
+  mcpTools: ["setConfluenceContentRestrictionState"],
+  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  flags: PageRestrictFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page restrict 123456 --state edit-restricted --plan",
+    "atl page restrict 123456 --state open --yes",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const target = contentTarget(input.args.page ?? "", flags.type);
+    requireYes(ctx, flags.yes, `Setting ${target.id} to ${flags.state}`);
+    const session = await openConfluence(ctx, target.site);
+    const set = await sendWrite<ApiRestrictionState>(
+      ctx,
+      session,
+      {
+        method: "PUT",
+        url: session.confluenceUrl(
+          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/restriction-state`,
+        ),
+        ...lockoutQuery(flags.allowSelfLockout),
+        body: { state: flags.state.toUpperCase().replaceAll("-", "_") },
+      },
+      { destructive: true, notFoundHint: RESTRICTION_NOT_FOUND_HINT },
+    );
+    if (isPlan(set) || ctx.full) {
+      return set;
+    }
+    const by =
+      set.createdBy === undefined
+        ? undefined
+        : (await displayNames(session, [set.createdBy])).get(set.createdBy);
+    return {
+      id: target.id,
+      state: set.state?.toLowerCase().replaceAll("_", "-"),
+      by,
+      at: shortTs(set.createdAt),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// page.property.set | delete
+// ---------------------------------------------------------------------------
+
+interface ApiContentProperty {
+  id: string;
+  key?: string;
+  value?: unknown;
+  version?: { number?: number };
+}
+
+/** The property with this exact key on the content, if any. */
+async function findProperty(
+  session: Session,
+  target: { base: ContentBase; id: string },
+  key: string,
+): Promise<ApiContentProperty | undefined> {
+  const found = await session.http.request<{ results?: ApiContentProperty[] }>({
+    method: "GET",
+    url: session.confluenceUrl(
+      `/api/v2/${target.base}/${encodeURIComponent(target.id)}/properties`,
+    ),
+    query: { key },
+  });
+  return found.results?.find((property) => property.key === key);
+}
+
+async function propertyValue(flags: {
+  value?: string | undefined;
+  valueFile?: string | undefined;
+}): Promise<unknown> {
+  const { value, valueFile } = flags;
+  if ((value === undefined) === (valueFile === undefined)) {
+    throw inputError(
+      "value_required",
+      "Pass exactly one of --value or --value-file",
+      "The value is any JSON: --value '{\"tier\":3}', --value 42, --value '\"text\"'",
+    );
+  }
+  const flag = valueFile === undefined ? "--value" : "--value-file";
+  const text =
+    valueFile === undefined
+      ? (value ?? "")
+      : await Bun.file(valueFile)
+          .text()
+          .catch((cause: unknown) => {
+            throw new AtlError(`Cannot read --value-file ${valueFile}`, {
+              code: "input_file_unreadable",
+              category: "input",
+              cause,
+            });
+          });
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw new AtlError(`${flag} is not valid JSON`, {
+      code: "invalid_json",
+      category: "input",
+      hint: "Quote strings as JSON: --value '\"text\"'",
+      cause,
+    });
+  }
+}
+
+const PagePropertySetFlags = Type.Object({
+  value: Type.Optional(Type.String({ description: "The property value as JSON" })),
+  valueFile: Type.Optional(Type.String({ description: "File holding the property value as JSON" })),
+  type: TYPE_FLAG,
+});
+
+export const pagePropertySet = defineCommand({
+  name: "page.property.set",
+  summary:
+    "Create a content property on a page or blog post, or replace its value (version bump); the value is JSON",
+  args: [
+    { name: "page", description: "Page id, URL, tiny link, or ARI", required: true },
+    { name: "key", description: "Property key", required: true },
+  ],
+  flags: PagePropertySetFlags,
+  sideEffects: "write",
+  examples: [
+    "atl page property set 123456 nm-owner --value '{\"tier\":3}'",
+    "atl page property set 123456 editor --value-file editor.json --plan",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const key = input.args.key ?? "";
+    const target = contentTarget(input.args.page ?? "", flags.type);
+    const value = await propertyValue(flags);
+    const session = await openConfluence(ctx, target.site);
+    const existing = await findProperty(session, target, key);
+    const collection = session.confluenceUrl(
+      `/api/v2/${target.base}/${encodeURIComponent(target.id)}/properties`,
+    );
+    const reread = [
+      "atl",
+      "page",
+      "properties",
+      target.id,
+      "--key",
+      key,
+      ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
+    ];
+    const written = await sendWrite<ApiContentProperty>(
+      ctx,
+      session,
+      existing === undefined
+        ? { method: "POST", url: collection, body: { key, value } }
+        : {
+            method: "PUT",
+            url: `${collection}/${encodeURIComponent(existing.id)}`,
+            body: {
+              key,
+              value,
+              version: { number: currentVersion(existing, `Property ${key}`) + 1 },
+            },
+          },
+      { reread },
+    );
+    if (isPlan(written) || ctx.full) {
+      return written;
+    }
+    return {
+      id: written.id,
+      key: written.key,
+      value: written.value,
+      version: written.version?.number,
+      action: existing === undefined ? "created" : "updated",
+      next: [reread],
+    };
+  },
+});
+
+export const pagePropertyDelete = defineCommand({
+  name: "page.property.delete",
+  summary: "Delete a content property of a page or blog post by key (needs --yes)",
+  args: [
+    { name: "page", description: "Page id, URL, tiny link, or ARI", required: true },
+    { name: "key", description: "Property key", required: true },
+  ],
+  flags: Type.Object({ yes: YES_FLAG, type: TYPE_FLAG }),
+  sideEffects: "write",
+  examples: [
+    "atl page property delete 123456 nm-owner --plan",
+    "atl page property delete 123456 nm-owner --yes",
+  ],
+  async run(ctx, input) {
+    const { flags } = input;
+    const key = input.args.key ?? "";
+    const target = contentTarget(input.args.page ?? "", flags.type);
+    requireYes(ctx, flags.yes, `Deleting property ${key} of ${target.id}`);
+    const session = await openConfluence(ctx, target.site);
+    const existing = await findProperty(session, target, key);
+    if (existing === undefined) {
+      throw new AtlError(`Page ${target.id} has no property ${JSON.stringify(key)}`, {
+        code: "property_not_found",
+        category: "api",
+        hint: "List the keys with `atl page properties <page>`.",
+        next: [["atl", "page", "properties", target.id]],
+      });
+    }
+    const removed = await sendWrite<unknown>(
+      ctx,
+      session,
+      {
+        method: "DELETE",
+        url: session.confluenceUrl(
+          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/properties/${encodeURIComponent(existing.id)}`,
+        ),
+      },
+      { destructive: true },
+    );
+    return isPlan(removed) ? removed : { id: target.id, deleted: key, propertyId: existing.id };
   },
 });
 
 export const confluenceWriteCommands: readonly CommandSpec[] = [
   pageCreate,
   pageUpdate,
+  pageMove,
+  pageCopy,
+  pageRestore,
+  pagePermissionsAdd,
+  pagePermissionsSet,
+  pagePermissionsRemove,
+  pageRestrict,
+  pagePropertySet,
+  pagePropertyDelete,
   commentAdd,
   commentUpdate,
 ];

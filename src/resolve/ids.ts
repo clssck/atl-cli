@@ -9,6 +9,8 @@ export interface ConfluenceRef {
   spaceKey?: string;
   commentId?: string;
   cloudId?: string;
+  /** `pageVersion=` of a page URL: the historical version the link points at. */
+  version?: number;
 }
 
 export interface JiraRef {
@@ -38,6 +40,37 @@ const NUMERIC = /^\d+$/;
 const HOSTNAME = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 const SITE_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const ISSUE_KEY = /^([A-Z][A-Z0-9_]+)-(\d+)$/;
+
+/** Percent-decode one path segment; a raw `%` (hand-built slug) leaves the segment as typed. */
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function pathSegments(url: URL): string[] {
+  return url.pathname
+    .split("/")
+    .filter((s) => s !== "")
+    .map((s) => safeDecode(s));
+}
+
+/** Path segments below the optional `/wiki` context path. */
+function wikiSegments(url: URL): string[] {
+  const segs = pathSegments(url);
+  return segs[0] === "wiki" ? segs.slice(1) : segs;
+}
+
+/** Strip what chat and docs wrap around a reference: `[text](ref)`, `<ref>`, `[ref]`, a trailing `:`. */
+function unwrapRef(input: string): string {
+  let text = input.trim();
+  text = /^\[[^\]]*\]\(([^()\s]+)\)$/.exec(text)?.[1] ?? text;
+  text = /^<([^<>\s]+)>$/.exec(text)?.[1] ?? text;
+  text = /^\[([^[\]\s]+)\]$/.exec(text)?.[1] ?? text;
+  return text.replace(/:$/, "");
+}
 
 /** Parse as URL when the input has a scheme or looks like `host/path`. */
 function tryUrl(input: string): URL | undefined {
@@ -84,6 +117,8 @@ export function parseSite(input: string): string {
 
 /* Tiny links: page id as 8-byte little-endian, base64, '/'->'-' '+'->'_', trailing '=' and 'A' stripped. */
 const TINY_CHARS = /^[A-Za-z0-9_\-+/]+$/;
+/** Cloud content ids stay far below 2^42; a larger decoded value is a mistyped or foreign link. */
+const MAX_TINY_ID = 1n << 42n;
 
 export function decodeTinyLink(tiny: string): string {
   const text = tiny.trim().replace(/=+$/, "");
@@ -96,7 +131,7 @@ export function decodeTinyLink(tiny: string): string {
     throw inputError("invalid_tiny_link", `Invalid Confluence tiny link: ${tiny}`);
   }
   const id = bytes.readBigUInt64LE(0);
-  if (id === 0n) {
+  if (id === 0n || id >= MAX_TINY_ID) {
     throw inputError("invalid_tiny_link", `Invalid Confluence tiny link: ${tiny}`);
   }
   return id.toString();
@@ -108,7 +143,7 @@ export function encodeTinyLink(id: string | number | bigint): string {
     throw inputError("invalid_tiny_link", `Cannot encode non-numeric id: ${text}`);
   }
   const value = BigInt(text);
-  if (value === 0n || value > 0xffffffffffffffffn) {
+  if (value === 0n || value >= MAX_TINY_ID) {
     throw inputError("invalid_tiny_link", `Id out of range for tiny link: ${text}`);
   }
   const bytes = Buffer.alloc(8);
@@ -154,22 +189,47 @@ function confluenceFromAri(ari: Ari, input: string): ConfluenceRef {
   return { kind, id: ari.id, ...(ari.cloudId === "" ? {} : { cloudId: ari.cloudId }) };
 }
 
+/** Legacy `/display/<SPACE>/<Title>` link: the page is found by exact title in the space. */
+export interface DisplayLink {
+  site: string;
+  spaceKey: string;
+  title: string;
+}
+
+export function parseDisplayLink(input: string): DisplayLink | undefined {
+  const url = tryUrl(unwrapRef(input));
+  if (url === undefined) {
+    return undefined;
+  }
+  const raw = url.pathname.split("/").filter((s) => s !== "");
+  const rest = raw[0] === "wiki" ? raw.slice(1) : raw;
+  const [head, space, title] = rest;
+  if (head !== "display" || space === undefined || title === undefined) {
+    return undefined;
+  }
+  return {
+    site: url.hostname.toLowerCase(),
+    spaceKey: safeDecode(space),
+    title: safeDecode(title.replaceAll("+", " ")),
+  };
+}
+
 function confluenceFromUrl(url: URL, input: string): ConfluenceRef {
   const site = url.hostname.toLowerCase();
-  const segs = url.pathname
-    .split("/")
-    .filter((s) => s !== "")
-    .map(decodeURIComponent);
+  const rest = wikiSegments(url);
   const focused = url.searchParams.get("focusedCommentId");
   const commentId = focused !== null && NUMERIC.test(focused) ? focused : undefined;
+  const pageVersion = url.searchParams.get("pageVersion");
+  const version =
+    pageVersion !== null && /^[1-9]\d*$/.test(pageVersion) ? Number(pageVersion) : undefined;
   const build = (kind: ConfluenceKind, id: string, spaceKey?: string): ConfluenceRef => ({
     kind,
     id,
     site,
     ...(spaceKey === undefined ? {} : { spaceKey }),
     ...(commentId === undefined ? {} : { commentId }),
+    ...(version === undefined ? {} : { version }),
   });
-  const rest = segs[0] === "wiki" ? segs.slice(1) : segs;
 
   if (rest[0] === "spaces" && rest[1] !== undefined) {
     const spaceKey = rest[1];
@@ -178,6 +238,9 @@ function confluenceFromUrl(url: URL, input: string): ConfluenceRef {
       if (candidate !== undefined && NUMERIC.test(candidate)) {
         return build("page", candidate, spaceKey);
       }
+    }
+    if (rest[2] === "history" && rest[3] !== undefined && NUMERIC.test(rest[3])) {
+      return build("page", rest[3], spaceKey);
     }
     if (rest[2] === "blog") {
       const candidate = rest
@@ -188,18 +251,22 @@ function confluenceFromUrl(url: URL, input: string): ConfluenceRef {
       }
     }
   }
-  if (rest[0] === "pages" && (rest[1] === "viewpage.action" || rest[1] === "editpage.action")) {
-    const pageId = url.searchParams.get("pageId");
-    if (pageId !== null && NUMERIC.test(pageId)) {
-      return build("page", pageId);
+  // Links that carry only a content id (viewer, tiny link, draft) do not say page or blog post.
+  if (rest[0] === "x" && rest[1] !== undefined) {
+    return build("unknown-content", decodeTinyLink(rest[1]));
+  }
+  for (const param of ["pageId", "draftId"]) {
+    const id = url.searchParams.get(param);
+    if (id !== null && NUMERIC.test(id)) {
+      return build("unknown-content", id);
     }
   }
-  if (rest[0] === "x" && rest[1] !== undefined) {
-    return build("page", decodeTinyLink(rest[1]));
-  }
-  const pageId = url.searchParams.get("pageId");
-  if (pageId !== null && NUMERIC.test(pageId)) {
-    return build("page", pageId);
+  if (parseDisplayLink(url.href) !== undefined) {
+    throw inputError(
+      "invalid_content_ref",
+      `Legacy /display/ link has no page id: ${input}`,
+      "Find the page by exact title: atl space pages <SPACE> --title <title>",
+    );
   }
   throw inputError("invalid_content_ref", `Unrecognized Confluence URL: ${input}`);
 }
@@ -215,7 +282,7 @@ function isDatePart(segs: readonly string[], index: number): boolean {
 }
 
 export function parseConfluenceRef(input: string): ConfluenceRef {
-  const text = input.trim();
+  const text = unwrapRef(input);
   if (NUMERIC.test(text)) {
     return { kind: "page", id: text };
   }
@@ -240,7 +307,7 @@ function normalizeKey(text: string): string | undefined {
 }
 
 export function parseJiraRef(input: string): JiraRef {
-  const text = input.trim();
+  const text = unwrapRef(input);
   const invalid = () =>
     inputError(
       "invalid_issue_ref",
@@ -271,10 +338,7 @@ export function parseJiraRef(input: string): JiraRef {
   if (selectedKey !== undefined) {
     return { key: selectedKey, site };
   }
-  const segs = url.pathname
-    .split("/")
-    .filter((s) => s !== "")
-    .map(decodeURIComponent);
+  const segs = pathSegments(url);
   if (segs[0] === "browse" && segs[1] !== undefined) {
     const k = normalizeKey(segs[1]);
     if (k !== undefined) {
@@ -303,7 +367,7 @@ function looksConfluencePath(url: URL): boolean {
 }
 
 export function parseAnyRef(input: string): AnyRef {
-  const text = input.trim();
+  const text = unwrapRef(input);
   if (NUMERIC.test(text)) {
     throw inputError(
       "ambiguous_ref",
@@ -341,17 +405,13 @@ export function parseAnyRef(input: string): AnyRef {
 }
 
 export function parseSpaceRef(input: string): SpaceRef {
-  const text = input.trim();
+  const text = unwrapRef(input);
   if (NUMERIC.test(text)) {
     return { id: text };
   }
   const url = tryUrl(text);
   if (url !== undefined) {
-    const segs = url.pathname
-      .split("/")
-      .filter((s) => s !== "")
-      .map(decodeURIComponent);
-    const rest = segs[0] === "wiki" ? segs.slice(1) : segs;
+    const rest = wikiSegments(url);
     if (rest[0] === "spaces" && rest[1] !== undefined) {
       return { key: rest[1] };
     }

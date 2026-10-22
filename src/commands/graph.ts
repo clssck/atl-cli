@@ -1,11 +1,11 @@
 import { Type } from "../core/schema.ts";
 import { closestMatch, defineCommand, type CommandSpec } from "../core/cli.ts";
 import { AtlError } from "../core/errors.ts";
-import { graphql } from "../core/graphql.ts";
+import { graphql, tokenPage } from "../core/graphql.ts";
 import { isRecord } from "../core/guards.ts";
 import type { FetchLike, HttpClient } from "../core/http.ts";
 import { openSession, type Session } from "../core/session.ts";
-import { decodeStateCursor, encodeStateCursor } from "../core/paginate.ts";
+import { decodeStateCursor, encodeStateCursor, paginateJiraToken } from "../core/paginate.ts";
 import {
   parseAnyRef,
   parseConfluenceRef,
@@ -14,7 +14,7 @@ import {
   type AnyRef,
   type JiraRef,
 } from "../resolve/index.ts";
-import { renderAdf, shortTs } from "./common.ts";
+import { PAGING_FLAGS, pagePolicy, renderAdf, shortTs } from "./common.ts";
 import { webUrl } from "./confluence.ts";
 import { RELATIONSHIP_TYPES, type RelationshipType } from "./graph-catalog.ts";
 import { applyArgv, planOrSend } from "./write.ts";
@@ -803,7 +803,7 @@ function describeFailure(identifier: string, error: unknown): string {
 const graphObject = defineCommand({
   name: "graph.object",
   summary: "Hydrate Teamwork Graph objects from ARIs, URLs, or issue keys",
-  mcpTools: ["getTeamworkGraphObject"],
+  mcpTools: ["getTeamworkGraphObject", "getGraphObject"],
   args: [
     {
       name: "id",
@@ -1198,7 +1198,7 @@ async function listTargets(
 const graphContext = defineCommand({
   name: "graph.context",
   summary: "Teamwork Graph relationships and context for one object",
-  mcpTools: ["getTeamworkGraphContext"],
+  mcpTools: ["getTeamworkGraphContext", "getGraphContext"],
   args: [
     {
       name: "objectType",
@@ -1430,7 +1430,7 @@ async function remoteTarget(
 const graphAdd = defineCommand({
   name: "graph.add",
   summary: "Create a relationship between two Jira work items, or attach a remote link",
-  mcpTools: ["addTeamworkGraphContext"],
+  mcpTools: ["addTeamworkGraphContext", "addGraphContext"],
   args: [
     {
       name: "relationshipType",
@@ -1556,4 +1556,159 @@ const graphAdd = defineCommand({
   },
 });
 
-export const graphCommands: readonly CommandSpec[] = [graphContext, graphObject, graphAdd];
+// ---------------------------------------------------------------------------
+// graph.cypher
+// ---------------------------------------------------------------------------
+
+/** Every member of the column value union; scalar `value`s are aliased because their types differ. */
+const CYPHER_DOCUMENT = `query GraphCypher($query: String!, $params: JSON, $context: String, $first: Int, $after: String) {
+  graphStore_cypherQueryV2(query: $query, params: $params, first: $first, after: $after, version: V2, queryContext: $context) @optIn(to: "GraphStoreCypherQueryV2") {
+    pageInfo { hasNextPage endCursor }
+    edges { node { columns { key value { __typename
+      ... on GraphStoreCypherQueryV2AriNode { id data { __typename } }
+      ... on GraphStoreCypherQueryV2NodeList { nodes { id data { __typename } } }
+      ... on GraphStoreCypherQueryV2Path { elements }
+      ... on GraphStoreCypherQueryV2BooleanObject { b: value }
+      ... on GraphStoreCypherQueryV2IntObject { i: value }
+      ... on GraphStoreCypherQueryV2FloatObject { f: value }
+      ... on GraphStoreCypherQueryV2StringObject { s: value }
+      ... on GraphStoreCypherQueryV2TimestampObject { t: value }
+      ... on GraphStoreCypherQueryV2BoolListObject { bl: values }
+      ... on GraphStoreCypherQueryV2IntListObject { il: values }
+      ... on GraphStoreCypherQueryV2FloatListObject { fl: values }
+      ... on GraphStoreCypherQueryV2StringListObject { sl: values }
+      ... on GraphStoreCypherQueryV2TimestampListObject { tl: values }
+    } } } }
+  }
+}`;
+
+/** A node as `{ari, type}` (type from the hydrated typename), or just the ARI when untyped. */
+function cypherNode(node: unknown): unknown {
+  if (!isRecord(node)) {
+    return undefined;
+  }
+  const typename = isRecord(node.data) ? stringOf(node.data.__typename) : undefined;
+  return typename === undefined
+    ? node.id
+    : { ari: node.id, type: OBJECT_TYPE_OF[typename] ?? typename };
+}
+
+/** One column value without the union scaffolding. */
+function cypherValue(value: Record<string, unknown>): unknown {
+  if ("id" in value) {
+    return cypherNode(value);
+  }
+  if (Array.isArray(value.nodes)) {
+    return value.nodes.map(cypherNode);
+  }
+  for (const key of ["elements", "bl", "il", "fl", "sl", "tl", "b", "i", "f", "s", "t"]) {
+    if (key in value) {
+      return value[key];
+    }
+  }
+  return undefined;
+}
+
+interface CypherPage {
+  rows: Record<string, unknown>[];
+  nextPageToken?: string;
+  isLast: boolean;
+}
+
+async function readParams(path: string | undefined): Promise<Record<string, unknown> | undefined> {
+  if (path === undefined) {
+    return undefined;
+  }
+  const text = await Bun.file(path)
+    .text()
+    .catch(() => {
+      throw new AtlError(`Cannot read --params-file ${path}`, {
+        code: "file_not_found",
+        category: "input",
+      });
+    });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  if (!isRecord(parsed)) {
+    throw new AtlError(`--params-file ${path} must hold a JSON object`, {
+      code: "invalid_params",
+      category: "input",
+      hint: 'Write the Cypher parameters as an object, e.g. {"aris": ["ari:cloud:..."]}.',
+    });
+  }
+  return parsed;
+}
+
+const graphCypher = defineCommand({
+  name: "graph.cypher",
+  summary:
+    "Run a raw Teamwork Graph Cypher query (rows keyed by RETURN column; nodes as {ari, type})",
+  args: [
+    {
+      name: "query",
+      description: "Cypher query, e.g. MATCH (n) WHERE n.ari = $ari RETURN n",
+      required: true,
+    },
+  ],
+  flags: Type.Object({
+    paramsFile: Type.Optional(
+      Type.String({ description: "JSON object file with the query's $parameters" }),
+    ),
+    ...PAGING_FLAGS,
+  }),
+  sideEffects: "none",
+  examples: [
+    'atl graph cypher "MATCH (i:JiraWorkItem)-[r]->(n) WHERE i.ari = $ari RETURN n" --params-file p.json',
+    'atl graph cypher "MATCH (p:ConfluencePage) RETURN p" --limit 10',
+  ],
+  async run(ctx, input) {
+    const params = await readParams(input.flags.paramsFile);
+    const session = await openSession(ctx, { fetch: graphDeps.fetch });
+    const raw: unknown[] = [];
+    const partial: string[] = [];
+    const paged = await paginateJiraToken(
+      pagePolicy(input.flags, { defaultLimit: 50, maxPageSize: 100 }),
+      (page: CypherPage) => page.rows,
+      async ({ cursor, pageSize }) => {
+        const { data, partialErrors } = await graphql(session.http, {
+          operationName: "GraphCypher",
+          query: CYPHER_DOCUMENT,
+          variables: {
+            query: input.args.query ?? "",
+            ...(params === undefined ? {} : { params }),
+            context: siteContext(session.site.cloudId),
+            first: pageSize,
+            ...(cursor === undefined ? {} : { after: cursor }),
+          },
+        });
+        partial.push(...partialErrors);
+        const connection = data.graphStore_cypherQueryV2;
+        raw.push(connection);
+        const rows = edgeNodes(connection).map((node) =>
+          Object.fromEntries(
+            [...columnsOf(node)].map(([key, value]) => [
+              key,
+              ctx.full ? value : cypherValue(value),
+            ]),
+          ),
+        );
+        return { rows, ...tokenPage(isRecord(connection) ? connection.pageInfo : undefined) };
+      },
+    );
+    if (ctx.full) {
+      return { data: raw, nextCursor: paged.nextCursor, partialErrors: partial };
+    }
+    return { ...paged, ...(partial.length === 0 ? {} : { errors: partial }) };
+  },
+});
+
+export const graphCommands: readonly CommandSpec[] = [
+  graphContext,
+  graphObject,
+  graphAdd,
+  graphCypher,
+];

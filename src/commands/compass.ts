@@ -1,11 +1,12 @@
 import { Type } from "../core/schema.ts";
 import { check } from "../core/validate.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
-import { AtlError } from "../core/errors.ts";
+import { AtlError, inputError } from "../core/errors.ts";
 import { graphql, GRAPHQL_URL, type GraphqlRequest } from "../core/graphql.ts";
 import { isRecord } from "../core/guards.ts";
 import { mapHttpError, type FetchLike } from "../core/http.ts";
 import { openSession } from "../core/session.ts";
+import { readJsonObject } from "./common.ts";
 import { applyArgv, planOf } from "./write.ts";
 
 export const compassGroups: Readonly<Record<string, string>> = {
@@ -127,46 +128,12 @@ const CREATE_FIELD_DEFINITION = `mutation CompassCreateCustomFieldDefinition($in
 // Plumbing
 // ---------------------------------------------------------------------------
 
-function inputError(code: string, message: string, hint?: string): AtlError {
-  return new AtlError(message, {
-    code,
-    category: "input",
-    ...(hint === undefined ? {} : { hint }),
-  });
-}
-
 function unexpected(operationName: string): AtlError {
   return new AtlError(`Compass ${operationName} returned an unexpected payload`, {
     code: "unexpected_response",
     category: "api",
     hint: "Re-run with --full to see the raw payload.",
   });
-}
-
-async function readJsonObject(path: string, flag: string): Promise<Record<string, unknown>> {
-  const text = await Bun.file(path)
-    .text()
-    .catch((cause: unknown) => {
-      throw new AtlError(`Cannot read ${flag} ${path}`, {
-        code: "input_file_unreadable",
-        category: "input",
-        cause,
-      });
-    });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (cause) {
-    throw new AtlError(`${flag} ${path} is not valid JSON`, {
-      code: "invalid_json_file",
-      category: "input",
-      cause,
-    });
-  }
-  if (!isRecord(parsed)) {
-    throw inputError("invalid_json_file", `${flag} ${path} must contain a JSON object`);
-  }
-  return parsed;
 }
 
 function stringOf(value: unknown): string | undefined {

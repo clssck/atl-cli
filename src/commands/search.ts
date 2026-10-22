@@ -4,10 +4,17 @@ import { defineCommand, type CommandSpec } from "../core/cli.ts";
 import { AtlError } from "../core/errors.ts";
 import { isRecord } from "../core/guards.ts";
 import type { FetchLike } from "../core/http.ts";
-import { cursorFromNextLink, decodeStateCursor, encodeStateCursor } from "../core/paginate.ts";
+import {
+  decodeStateCursor,
+  encodeStateCursor,
+  nextPageToken,
+  paginateConfluenceV1Search,
+  type ConfluenceSearchPage,
+} from "../core/paginate.ts";
 import { openSession, type Session } from "../core/session.ts";
-import { shortTs } from "./common.ts";
-import { snippet, webUrl } from "./confluence.ts";
+import { writeDiagnostic } from "../core/output.ts";
+import { queryLiteral, shortTs } from "./common.ts";
+import { searchHitSpaceKey, snippet, webUrl } from "./confluence.ts";
 
 export const searchGroups: Readonly<Record<string, string>> = {
   user: "Find Atlassian users",
@@ -107,6 +114,59 @@ const userFind = defineCommand({
   },
 });
 
+interface BulkUser {
+  accountId?: string;
+  accountType?: string;
+  accountStatus?: string;
+  displayName?: string;
+  email?: string;
+  locale?: string;
+}
+
+/** Confluence `/user/bulk` takes at most 200 account ids per request. */
+const BULK_USER_LIMIT = 200;
+
+const userGet = defineCommand({
+  name: "user.get",
+  summary: "Get user profiles by account id (via Confluence; Jira's /user is out of token scope)",
+  mcpTools: ["getJiraUser"],
+  args: [
+    { name: "accountId", description: "Atlassian account id", required: true, variadic: true },
+  ],
+  flags: Type.Object({}),
+  sideEffects: "none",
+  examples: ["atl user get 5b10ac8d82e05b22cc7d4ef5", "atl user get <accountId> <accountId>"],
+  async run(ctx, input) {
+    const session = await openSession(ctx, { fetch: searchDeps.fetch });
+    const ids = [...new Set(input.rest)];
+    const found: BulkUser[] = [];
+    for (let at = 0; at < ids.length; at += BULK_USER_LIMIT) {
+      const chunk = ids.slice(at, at + BULK_USER_LIMIT);
+      const page = await session.http.request<{ results?: BulkUser[] }>({
+        method: "GET",
+        url: session.confluenceUrl("/rest/api/user/bulk"),
+        query: { accountId: chunk, limit: chunk.length },
+      });
+      found.push(...(page.results ?? []));
+    }
+    if (ctx.full) {
+      return { items: found, nextCursor: null };
+    }
+    const seen = new Set(found.map((u) => u.accountId));
+    return {
+      items: found.map((u) => ({
+        accountId: u.accountId,
+        name: u.displayName,
+        email: u.email,
+        type: u.accountType === "atlassian" ? undefined : u.accountType,
+        status: u.accountStatus === "active" ? undefined : u.accountStatus,
+        locale: u.locale,
+      })),
+      missing: ids.filter((id) => !seen.has(id)),
+    };
+  },
+});
+
 // ---------------------------------------------------------------------------
 // search
 // ---------------------------------------------------------------------------
@@ -114,19 +174,19 @@ const userFind = defineCommand({
 type Product = "confluence" | "jira";
 
 interface ConfluenceHit {
-  content?: { id?: string; type?: string };
+  content?: {
+    id?: string;
+    type?: string;
+    space?: { key?: string };
+    ancestors?: { title?: string }[];
+  };
+  resultGlobalContainer?: { displayUrl?: string };
   space?: { id?: number | string };
   entityType?: string;
   title?: string;
   excerpt?: string;
   url?: string;
   lastModified?: string;
-}
-
-interface ConfluenceSearchPage {
-  results?: ConfluenceHit[];
-  cursor?: string;
-  _links?: { next?: string };
 }
 
 interface JiraHit {
@@ -190,6 +250,27 @@ function decodeCursor(cursor: string): SearchState {
 const HIGHLIGHT = /@@@(?:end)?hl@@@/g;
 const JIRA_FIELDS = "summary,updated,status,issuetype,project,description";
 
+/**
+ * User text must match literally, but Lucene (behind both CQL and JQL `~`) reads upper-case
+ * AND / OR / NOT as operators and a leading `-` as exclusion: lower-case the words (a lower-case
+ * "and" is an ordinary stop word) and escape the dash.
+ */
+function literalText(query: string): string {
+  return query
+    .replaceAll(/(?<![\w])(?:AND|OR|NOT)(?![\w])/g, (word) => word.toLowerCase())
+    .replaceAll(/(^|\s)-(?=\S)/g, "$1\\-");
+}
+
+/** The CQL `search` runs for Confluence (`text`), and the `atl cql` equivalent of it. */
+function confluenceCql(query: string, type: string | undefined, field = "text"): string {
+  return `${field} ~ ${queryLiteral(literalText(query))}${type === undefined ? "" : ` AND type = ${type}`}`;
+}
+
+function jiraJql(query: string, field = "text"): string {
+  return `${field} ~ ${queryLiteral(literalText(query))}`;
+}
+
+/** One Confluence slice of `take` items; the paginator retries an empty or short index answer. */
 async function searchConfluence(
   session: Session,
   query: string,
@@ -197,17 +278,22 @@ async function searchConfluence(
   take: number,
   cursor: string | undefined,
 ): Promise<SourcePage<ConfluenceHit>> {
-  const cql = `text ~ ${JSON.stringify(query)}${type === undefined ? "" : ` AND type = ${type}`}`;
-  const page = await session.http.request<ConfluenceSearchPage>({
-    method: "GET",
-    url: session.confluenceUrl("/rest/api/search"),
-    query: { cql, limit: take, ...(cursor === undefined ? {} : { cursor }) },
-  });
-  const linked = cursorFromNextLink(page._links?.next);
-  return {
-    items: page.results ?? [],
-    next: linked ?? (page.cursor === undefined || page.cursor === "" ? null : page.cursor),
-  };
+  const cql = confluenceCql(query, type);
+  const paged = await paginateConfluenceV1Search<ConfluenceHit>(
+    { limit: take, defaultLimit: take, maxPageSize: take, cursor },
+    ({ cursor: from, pageSize }) =>
+      session.http.request<ConfluenceSearchPage<ConfluenceHit>>({
+        method: "GET",
+        url: session.confluenceUrl("/rest/api/search"),
+        query: {
+          cql,
+          expand: "content.ancestors",
+          limit: pageSize,
+          ...(from === undefined ? {} : { cursor: from }),
+        },
+      }),
+  );
+  return { items: paged.items, next: paged.nextCursor };
 }
 
 async function searchJira(
@@ -220,18 +306,19 @@ async function searchJira(
     method: "GET",
     url: session.jiraUrl("/rest/api/3/search/jql"),
     query: {
-      jql: `text ~ ${JSON.stringify(query)}`,
+      jql: jiraJql(query),
       fields: JIRA_FIELDS,
       maxResults: take,
       ...(cursor === undefined ? {} : { nextPageToken: cursor }),
     },
   });
-  const more =
-    page.isLast !== true && page.nextPageToken !== undefined && page.nextPageToken !== "";
-  return { items: page.issues ?? [], next: more ? (page.nextPageToken ?? null) : null };
+  return { items: page.issues ?? [], next: nextPageToken(page) };
 }
 
-/** Same item shape as `cql`: bare content id plus type; the url only where id and type cannot rebuild it. */
+/**
+ * Same item shape as `cql`: bare content id plus type; the url only where id and type cannot
+ * rebuild it. `spaceKey` and the immediate `parent` title tell apart hits with the same title.
+ */
 function compactConfluence(session: Session, hit: ConfluenceHit) {
   const type = hit.content?.type ?? hit.entityType;
   const id = hit.content?.id ?? (type === "space" ? hit.space?.id : undefined);
@@ -239,6 +326,8 @@ function compactConfluence(session: Session, hit: ConfluenceHit) {
     id: id === undefined ? undefined : String(id),
     type,
     title: hit.title?.replaceAll(HIGHLIGHT, ""),
+    spaceKey: searchHitSpaceKey(hit),
+    parent: hit.content?.ancestors?.at(-1)?.title,
     text: snippet(hit.excerpt),
     lastModified: shortTs(hit.lastModified),
     url: type === "page" || type === "blogpost" ? undefined : webUrl(session, hit.url),
@@ -397,11 +486,25 @@ const search = defineCommand({
       jira: ctx.full ? collected.jira : collected.jira.map(compactJira),
     };
     state.turn = state.turn === 0 ? 1 : 0;
+    const items = interleave(order.map((name) => lists[name]));
+    if (items.length === 0 && input.flags.cursor === undefined) {
+      // The empty first page was already retried by the paginator, so the query itself has no hit.
+      const cqlType = type === "issue" ? undefined : type;
+      writeDiagnostic({
+        type: "hint",
+        code: "empty_search",
+        hint: "No results; try fewer or alternate terms, or match titles/summaries only",
+        next: [
+          ...(only === "jira" ? [] : [["atl", "cql", confluenceCql(query, cqlType, "title")]]),
+          ...(only === "confluence" ? [] : [["atl", "jql", jiraJql(query, "summary")]]),
+        ],
+      });
+    }
     return {
-      items: interleave(order.map((name) => lists[name])),
+      items,
       nextCursor: state.confluence.done && state.jira.done ? null : encodeStateCursor(state),
     };
   },
 });
 
-export const searchCommands: readonly CommandSpec[] = [search, userFind];
+export const searchCommands: readonly CommandSpec[] = [search, userFind, userGet];

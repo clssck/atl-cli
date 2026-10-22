@@ -1,4 +1,5 @@
 import { isRecord } from "../core/guards.ts";
+import { isAdfDocLike } from "./types.ts";
 import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
 
 /**
@@ -8,12 +9,17 @@ import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
  * - panel:           blockquote whose first line starts with `**Info:**` (Note/Warning/Error/Success)
  * - expand:          `<details><summary>title</summary>` ... `</details>`
  * - decision item:   `- [decision] text`
- * - media:           `![alt or "file"](media:<id>)`, plus `?collection=<c>` when known;
- *                    external media keeps its URL
- * - extension:       `<!-- macro:<key> -->`; bodied extensions add `<!-- /macro:<key> -->` after the body
+ * - media:           `![alt or "file"](media:<id>)`, plus `?collection=<c>` when known; external media
+ *                    keeps its URL (empty alt stays empty); a link mark wraps it as `[![alt](src)](href)`
+ * - extension:       `<!-- macro:<key> -->`; bodied extensions add `<!-- /macro:<key> -->` after the body.
+ *                    A Confluence `legacy-content` extension (a table or task list the page could not keep
+ *                    in place) renders its nested content; without it, its storage markup as an `xml` fence
  * - status:          `[TEXT]`, date: `YYYY-MM-DD`, mention: `@Name` or `@<accountId>`
  * - unknown node:    its children, else `<!-- adf:<type> -->`
- * Marks without markdown syntax (underline, subsup, textColor, ...) become plain text.
+ * - underline, sub, sup: `<u>x</u>`, `<sub>x</sub>`, `<sup>x</sup>` (markdown reads them back as marks)
+ * - table spans:     a merged cell (colspan/rowspan) repeats its text in every position it covers, so
+ *                    each row lists its values under the right headers
+ * Other marks without markdown syntax (textColor, ...) become plain text.
  * The result has no trailing newline.
  */
 
@@ -40,7 +46,14 @@ const INLINE_TYPES: Record<string, true> = {
   placeholder: true,
 };
 
-const MARK_RANK: Record<string, number> = { link: 0, strike: 1, strong: 2, em: 3 };
+const MARK_RANK: Record<string, number> = {
+  link: 0,
+  strike: 1,
+  strong: 2,
+  em: 3,
+  underline: 4,
+  subsup: 5,
+};
 
 const PANEL_LABELS: Record<string, string> = {
   info: "Info",
@@ -84,6 +97,9 @@ function markKey(mark: AdfMark): string {
   if (mark.type === "link") {
     return `link\u0000${str(mark.attrs?.href) ?? ""}\u0000${str(mark.attrs?.title) ?? ""}`;
   }
+  if (mark.type === "subsup") {
+    return `subsup\u0000${str(mark.attrs?.type) ?? ""}`;
+  }
   return mark.type;
 }
 
@@ -92,10 +108,13 @@ function normalizeMarks(marks: AdfMark[]): AdfMark[] {
   const seen = new Set<string>();
   const result: AdfMark[] = [];
   for (const mark of marks) {
-    if (!["strong", "em", "code", "strike", "link"].includes(mark.type)) {
+    if (!["strong", "em", "code", "strike", "link", "underline", "subsup"].includes(mark.type)) {
       continue;
     }
     if (mark.type === "link" && str(mark.attrs?.href) === undefined) {
+      continue;
+    }
+    if (mark.type === "subsup" && mark.attrs?.type !== "sub" && mark.attrs?.type !== "sup") {
       continue;
     }
     const key = markKey(mark);
@@ -165,8 +184,12 @@ function mediaMarkdown(node: AdfNode): string {
   } else {
     return `<!-- adf:${node.type} -->`;
   }
-  const alt = (str(attrs.alt) ?? "file").replaceAll(/\s+/g, " ").replaceAll(/[\\[\]]/g, "\\$&");
-  return `![${alt}](${destination})`;
+  const alt = (str(attrs.alt) ?? (external === undefined ? "file" : ""))
+    .replaceAll(/\s+/g, " ")
+    .replaceAll(/[\\[\]]/g, "\\$&");
+  const image = `![${alt}](${destination})`;
+  const href = str(node.marks?.find((mark) => mark.type === "link")?.attrs?.href);
+  return href === undefined ? image : `[${image}](${linkDestination(href)})`;
 }
 
 function macroKey(node: AdfNode): string {
@@ -347,6 +370,12 @@ function wrapMark(
       const title = str(mark.attrs?.title);
       const titlePart = title === undefined ? "" : ` "${title.replaceAll(/["\\]/g, "\\$&")}"`;
       return `${lead}[${core}](${linkDestination(href)}${titlePart})${trail}`;
+    }
+    case "underline":
+      return `${lead}<u>${core}</u>${trail}`;
+    case "subsup": {
+      const tag = mark.attrs?.type === "sub" ? "sub" : "sup";
+      return `${lead}<${tag}>${core}</${tag}>${trail}`;
     }
     default:
       return inner;
@@ -534,6 +563,35 @@ function prefixLines(text: string, first: string, rest: string): string {
     .join("\n");
 }
 
+/** A fenced code block; the fence is longer than any backtick run inside the code. */
+function fenced(code: string, language: string | undefined): string {
+  let longest = 0;
+  for (const run of code.match(/`{3,}/g) ?? []) {
+    longest = Math.max(longest, run.length);
+  }
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  const info = language !== undefined && /^[^\s`]+$/.test(language) ? language : "";
+  return `${fence}${info}\n${code}\n${fence}`;
+}
+
+/**
+ * Confluence stores a table or task list it cannot place (inside a quote or list item) as an
+ * `extension` with `parameters.nestedContent` (ADF) and `parameters.cxhtml` (storage markup).
+ */
+function legacyContent(node: AdfNode, ctx: Ctx): string | undefined {
+  const parameters = node.attrs?.parameters;
+  if (node.attrs?.extensionKey !== "legacy-content" || !isRecord(parameters)) {
+    return undefined;
+  }
+  const nested = parameters.nestedContent;
+  const body = isAdfDocLike(nested) ? renderBlocks(nested.content ?? [], ctx, false) : "";
+  const storage = str(parameters.cxhtml);
+  if (body !== "") {
+    return body;
+  }
+  return storage === undefined ? undefined : fenced(storage, "xml");
+}
+
 function renderBlock(node: AdfNode, ctx: Ctx, alt: boolean): string {
   const children = node.content ?? [];
   switch (node.type) {
@@ -544,17 +602,8 @@ function renderBlock(node: AdfNode, ctx: Ctx, alt: boolean): string {
       const text = renderInline(children, HEADING_CTX).replace(/#+$/, (run) => `\\${run}`);
       return text === "" ? "#".repeat(level) : `${"#".repeat(level)} ${text}`;
     }
-    case "codeBlock": {
-      const code = textOf(children).replace(/\n$/, "");
-      const language = str(node.attrs?.language);
-      let longest = 0;
-      for (const run of code.match(/`{3,}/g) ?? []) {
-        longest = Math.max(longest, run.length);
-      }
-      const fence = "`".repeat(Math.max(3, longest + 1));
-      const info = language !== undefined && /^[^\s`]+$/.test(language) ? language : "";
-      return `${fence}${info}\n${code}\n${fence}`;
-    }
+    case "codeBlock":
+      return fenced(textOf(children).replace(/\n$/, ""), str(node.attrs?.language));
     case "blockquote":
       return prefixLines(renderBlocks(children, ctx, false), "> ", "> ");
     case "rule":
@@ -609,7 +658,7 @@ function renderBlock(node: AdfNode, ctx: Ctx, alt: boolean): string {
       return url === undefined ? `<!-- adf:${node.type} -->` : cardMarkdown(url);
     }
     case "extension":
-      return `<!-- macro:${macroKey(node)} -->`;
+      return legacyContent(node, ctx) ?? `<!-- macro:${macroKey(node)} -->`;
     case "bodiedExtension": {
       const key = macroKey(node);
       const body = renderBlocks(children, ctx, false);
@@ -685,8 +734,42 @@ function cellText(cell: AdfNode): string {
   return parts.join("<br>");
 }
 
+const MAX_SPAN = 100;
+
+function spanOf(cell: AdfNode, name: "colspan" | "rowspan"): number {
+  const value = Math.trunc(Number(cell.attrs?.[name]));
+  return value > 1 ? Math.min(value, MAX_SPAN) : 1;
+}
+
 function renderTable(node: AdfNode): string {
-  const rows = (node.content ?? []).map((row) => (row.content ?? []).map(cellText));
+  // Columns covered by a rowspan cell from an earlier row, with the rows still to fill.
+  const carry = new Map<number, { text: string; left: number }>();
+  const rows = (node.content ?? []).map((row) => {
+    const line: string[] = [];
+    for (const [column, entry] of carry) {
+      line[column] = entry.text;
+      entry.left -= 1;
+      if (entry.left === 0) {
+        carry.delete(column);
+      }
+    }
+    let column = 0;
+    for (const cell of row.content ?? []) {
+      while (line[column] !== undefined) {
+        column += 1;
+      }
+      const text = cellText(cell);
+      const rowspan = spanOf(cell, "rowspan");
+      for (let covered = spanOf(cell, "colspan"); covered > 0; covered -= 1) {
+        line[column] = text;
+        if (rowspan > 1) {
+          carry.set(column, { text, left: rowspan - 1 });
+        }
+        column += 1;
+      }
+    }
+    return Array.from(line, (text) => text ?? "");
+  });
   if (rows.length === 0) {
     return "";
   }

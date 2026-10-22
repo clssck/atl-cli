@@ -205,6 +205,100 @@ describe("paginateConfluenceV1Search", () => {
     expect(result.items).toEqual(["a", "b", "c"]);
     expect(seen).toEqual([undefined, "tok1"]);
   });
+
+  describe("an inconsistent index answer", () => {
+    const policy = { all: true, defaultLimit: 25, maxPageSize: 100 };
+
+    function scripted(
+      pages: { results: string[]; totalSize?: number; _links?: { next: string } }[],
+    ) {
+      const requests: (string | undefined)[] = [];
+      const warnings: Record<string, unknown>[] = [];
+      const run = async () => {
+        const result = await paginateConfluenceV1Search(
+          policy,
+          (request) => {
+            requests.push(request.cursor);
+            return Promise.resolve(pages.shift() ?? { results: [] });
+          },
+          (text) => warnings.push(JSON.parse(text)),
+        );
+        return result;
+      };
+      return { requests, warnings, run };
+    }
+
+    test("an empty first page is requested once more before concluding", async () => {
+      const { requests, warnings, run } = scripted([
+        { results: [], totalSize: 0 },
+        { results: ["a", "b"], totalSize: 2 },
+      ]);
+      const result = await run();
+      expect(result.items).toEqual(["a", "b"]);
+      expect(requests).toEqual([undefined, undefined]);
+      expect(warnings).toEqual([]);
+    });
+
+    test("a short page with no next link while totalSize says more is retried", async () => {
+      const { requests, warnings, run } = scripted([
+        { results: ["a"], totalSize: 3, _links: { next: "/s?cursor=c1" } },
+        { results: ["b"], totalSize: 3 },
+        { results: ["b", "c"], totalSize: 3 },
+      ]);
+      const result = await run();
+      expect(result.items).toEqual(["a", "b", "c"]);
+      expect(requests).toEqual([undefined, "c1", "c1"]);
+      expect(warnings).toEqual([]);
+    });
+
+    test("a result that stays short is returned with a search_incomplete warning", async () => {
+      const { requests, warnings, run } = scripted([
+        { results: ["a"], totalSize: 3 },
+        { results: ["a"], totalSize: 3 },
+      ]);
+      const result = await run();
+      expect(result.items).toEqual(["a"]);
+      expect(result.nextCursor).toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(warnings).toMatchObject([
+        { type: "warning", code: "search_incomplete", totalSize: 3, returned: 1 },
+      ]);
+    });
+
+    test("a complete answer costs one request and an empty search stays empty without a warning", async () => {
+      const complete = scripted([{ results: ["a", "b"], totalSize: 2 }]);
+      expect((await complete.run()).items).toEqual(["a", "b"]);
+      expect(complete.requests).toHaveLength(1);
+      expect(complete.warnings).toEqual([]);
+
+      const none = scripted([
+        { results: [], totalSize: 0 },
+        { results: [], totalSize: 0 },
+      ]);
+      expect((await none.run()).items).toEqual([]);
+      expect(none.warnings).toEqual([]);
+    });
+
+    test("an empty page with totalSize 0 in the middle of a walk is retried, then warned about", async () => {
+      const recovered = scripted([
+        { results: ["a", "b"], totalSize: 4, _links: { next: "/s?cursor=c1" } },
+        { results: [], totalSize: 0 },
+        { results: ["c", "d"], totalSize: 4 },
+      ]);
+      expect((await recovered.run()).items).toEqual(["a", "b", "c", "d"]);
+      expect(recovered.warnings).toEqual([]);
+
+      const stuck = scripted([
+        { results: ["a", "b"], totalSize: 4, _links: { next: "/s?cursor=c1" } },
+        { results: [], totalSize: 0 },
+        { results: [], totalSize: 0 },
+      ]);
+      expect((await stuck.run()).items).toEqual(["a", "b"]);
+      expect(stuck.warnings).toMatchObject([
+        { code: "search_incomplete", totalSize: 4, returned: 2 },
+      ]);
+    });
+  });
 });
 
 describe("paginateJiraToken", () => {
@@ -328,6 +422,49 @@ describe("paginateJiraOffset", () => {
     );
     const error = await pending.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AtlError);
-    expect(error).toMatchObject({ code: "invalid_cursor" });
+    expect(error).toMatchObject({ code: "invalid_cursor", category: "input" });
+    expect(error instanceof AtlError && error.hint).toContain("nextCursor");
+  });
+});
+
+/** A 400 as the HTTP client maps it: the API's rejection of a garbled cursor. */
+const rejected = () =>
+  Promise.reject(
+    new AtlError("GET /x failed with HTTP 400: localized", {
+      code: "http_400",
+      category: "api",
+      status: 400,
+    }),
+  );
+
+describe("a garbled --cursor", () => {
+  const policy = { cursor: "garbage", defaultLimit: 5, maxPageSize: 5 };
+
+  test("the API's 400 becomes invalid_cursor (exit 1, with a hint) on every cursor paginator", async () => {
+    const attempts = [
+      paginateConfluenceV2(policy, rejected),
+      paginateConfluenceV1Search(policy, rejected),
+      paginateJiraToken(policy, () => [], rejected),
+    ];
+    for (const attempt of attempts) {
+      const error = await attempt.catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: "invalid_cursor", category: "input", exitCode: 1 });
+      expect(error instanceof AtlError && error.hint).toContain("nextCursor");
+    }
+  });
+
+  test("a 400 without a cursor, or on a later page, is left as the API error", async () => {
+    const first = await paginateConfluenceV2({ defaultLimit: 5, maxPageSize: 5 }, rejected).catch(
+      (e: unknown) => e,
+    );
+    expect(first).toMatchObject({ code: "http_400" });
+    let calls = 0;
+    const later = await paginateConfluenceV2({ all: true, defaultLimit: 5, maxPageSize: 5 }, () => {
+      calls++;
+      return calls === 1
+        ? Promise.resolve({ results: [1], _links: { next: "/x?cursor=c2" } })
+        : rejected();
+    }).catch((e: unknown) => e);
+    expect(later).toMatchObject({ code: "http_400" });
   });
 });

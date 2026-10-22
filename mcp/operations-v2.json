@@ -1,0 +1,6218 @@
+{
+  "generatedAt": "2026-10-22T10:12:43Z",
+  "endpoint": "https://mcp.atlassian.com/v2/mcp",
+  "count": 192,
+  "operations": [
+    {
+      "name": "createArtifactThumbnailUpload",
+      "product": "artifacts",
+      "executeTool": "executeDestructive",
+      "description": "Create a thumbnail for an artifact using an image generated locally or supplied by the user.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "length",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "checksum",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createArtifactsUpload",
+      "product": "artifacts",
+      "executeTool": "executeWrite",
+      "description": "Step 1 of 2 for uploading a new artifact or a new version of an existing artifact.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "length",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "checksum",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getArtifact",
+      "product": "artifacts",
+      "executeTool": "executeRead",
+      "description": "Get metadata for an artifact by ID.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "listArtifacts",
+      "product": "artifacts",
+      "executeTool": "executeRead",
+      "description": "List artifacts created by the current user using cursor pagination.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "publishArtifact",
+      "product": "artifacts",
+      "executeTool": "executeWrite",
+      "description": "Step 2 of 2 for uploading an artifact.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentType",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "revokeArtifactShare",
+      "product": "artifacts",
+      "executeTool": "executeDestructive",
+      "description": "Stop sharing an artifact with named users, groups, or teams, or with every audience at once.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "audienceAris",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "revokeAll",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "shareArtifact",
+      "product": "artifacts",
+      "executeTool": "executeWrite",
+      "description": "Grant named users, groups, or teams permission to view an existing artifact.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "audienceAris",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getAssetsObject",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Get an Assets object by ID from the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "objectId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getAssetsObjectSchema",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Get one or more Assets object schemas by ID from the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getAssetsObjectType",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Get one or more Assets object types by ID from the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "schemaId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getAssetsObjectsById",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Get one or more Assets objects by ID from the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getAssetsServiceObjectsById",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Get one or more Assets service objects by ID from the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listAssetsObjectSchemas",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "List all Assets object schemas in the selected site's workspace.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "includeCounts",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listAssetsObjectTypeAttributes",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "List attributes for one or more Assets object types in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "typeId",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "queryAssetsObjectSchemaAttributes",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Query attributes for one or more Assets object schemas in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "queryAssetsObjectTypes",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Query Assets object types by schema in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "schemaId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "excludeAbstract",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "queryAssetsObjects",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Query Assets objects with generated AQL for one object type in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "objectType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "accountId",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "person",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "personField",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "field",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "fieldLike",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "queryAssetsObjectsUsingAql",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Query Assets objects with raw or generated AQL in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "inputParts",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "aql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "objectType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "person",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "personField",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "field",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "fieldLike",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "queryAssetsReferenceTypes",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Query global or schema-scoped Assets reference types in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "schemaId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "includeAll",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "searchAssetsObjects",
+      "product": "assets",
+      "executeTool": "executeRead",
+      "description": "Search Assets objects by name or query-builder filters in the selected site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "inputParts",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "aql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "objectType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "field",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "fieldLike",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "person",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "personField",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createCapacityPlanNonProjectWork",
+      "product": "capacity-planning",
+      "executeTool": "executeWrite",
+      "description": "Create a non-project work item in Individual Capacity Planning.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contributorDataId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getCapacityPlanAllocations",
+      "product": "capacity-planning",
+      "executeTool": "executeRead",
+      "description": "Find who is allocated to what work in Individual Capacity Planning, across ALL capacity plans - not scoped to a single plan.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contributorDataIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "workDataIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "contributionStartDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "contributionEndDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "contributionFormatOptions",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "timeScale",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "last",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "before",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listCapacityPlanNonProjectWork",
+      "product": "capacity-planning",
+      "executeTool": "executeRead",
+      "description": "Search the non-project work items on a site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "last",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "before",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateCapacityPlanAllocations",
+      "product": "capacity-planning",
+      "executeTool": "executeDestructive",
+      "description": "Allocate people to a single work item over one or more time periods in Individual Capacity Planning.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contributorDataIds",
+          "type": "array",
+          "required": true
+        },
+        {
+          "name": "workId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "allocations",
+          "type": "array",
+          "required": true
+        },
+        {
+          "name": "valueType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateCapacityPlanNonProjectWork",
+      "product": "capacity-planning",
+      "executeTool": "executeWrite",
+      "description": "Rename an existing non-project work item in Individual Capacity Planning.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getCodeFile",
+      "product": "code-search",
+      "executeTool": "executeRead",
+      "description": "Read the full contents of a single file in a connected source-control repository at a specific commit.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "workspace",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "commitHash",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "listCodeDirectory",
+      "product": "code-search",
+      "executeTool": "executeRead",
+      "description": "List the files and subdirectories under a path in a connected source-control repository at a specific commit.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "workspace",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "commitHash",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "page",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "maxDepth",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "scanCodeRepo",
+      "product": "code-search",
+      "executeTool": "executeRead",
+      "description": "List the file paths in a connected source-control repository at a specific commit, optionally filtered by a glob or restricted to a subtree.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "workspace",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "commitHash",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "filter",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "root",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "searchCode",
+      "product": "code-search",
+      "executeTool": "executeRead",
+      "description": "Search source code across connected source-control providers using semantic, lexical, or hybrid matching.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "extension",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "addConfluenceContentPermissions",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Adds one or more content-level permission grants to a single Confluence content entity.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "permissions",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "addConfluenceReaction",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Add emoji reaction to Confluence content",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "emojiId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "addLabelsToConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Add labels to any Confluence content (page, blogpost, attachment, custom content)",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "labels",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "archiveConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Archive a single Confluence content entity",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "completeConfluenceTask",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Mark a Confluence inline task as complete",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "taskId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "convertConfluenceContentMode",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Convert a Confluence page or live doc between classic page mode and live-doc mode",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "contentUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "targetMode",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "copyConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Copy a Confluence page, whiteboard, database, folder, or embed to a new parent",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "parentContentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "destinationSpaceKey",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createConfluenceAttachment",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Prepare a Confluence attachment upload and return a local curl command",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "localFilePath",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fileSize",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createConfluenceComment",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Create or reply to a comment on a Confluence page or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "commentType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "inlineSelection",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "parentCommentId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createConfluenceInfographicForPage",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Create an infographic in a page workflow.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "theme",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "aspectRatio",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createConfluenceMauiApp",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Create a Maui app in a page workflow.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Create a Confluence space.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "alias",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "roleAssignments",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "createPrivateSpace",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "copySpaceAccessConfiguration",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "templateKey",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "diffConfluenceContentVersions",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Compute a unified diff between two versions of a Confluence page, live doc, or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "from_version",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "to_version",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "content_format",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "disableConfluencePublicLink",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Disable the external public link (anonymous share) for a Confluence page",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "downloadConfluenceAttachment",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get a Confluence attachment download URL and return a local curl command",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attachmentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "outputPath",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "version",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "editConfluenceInfographicForPage",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Edit an infographic in a page workflow.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mediaFileId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "theme",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "aspectRatio",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "editConfluenceMauiApp",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Edit a Maui app in a page workflow.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mauiId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "enableConfluencePublicLink",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Enable the external public link (anonymous share) for a Confluence page",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "exportConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Export Confluence content as PDF or Word and return a download link",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "format",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceApproval",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get Confluence page approval availability, approval status, reviewers, and optional progress or history.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "contentStatus",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceAttachment",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get Confluence attachment metadata by attachment ID",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attachmentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceComment",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get a single Confluence comment by ID",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "commentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "comment-type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "body-format",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "include-replies",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentAnalytics",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Return per-user Confluence viewer rows for one supported content item (page, live doc, or blog post), including each viewer's engagement category, the latest version viewed, and last viewed time.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "content_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "fromDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "toDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentAncestors",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List the ancestor chain (parent, grandparent, …) of a Confluence content entity",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentDescendants",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List descendants of a Confluence content entity (page, folder, whiteboard, database, embed, or slide)",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "depth",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentPermissions",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Lists the explicit content-level permission grants on a single Confluence content entity.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "principal-type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "principal-id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentRestrictionState",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Reads General access for a single Confluence content entity.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentStatus",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Read the content state (status) of a Confluence page or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceContentVersion",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get one historical version of a Confluence page, live doc, or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "versionNumber",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "content_format",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceMauiApp",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Retrieve the source and metadata for a Maui app owned by a Confluence page.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mauiId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluencePersonalSpace",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get the current user's Confluence personal space",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluencePublicLinkStatus",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get the external public-link (anonymous share) status of a Confluence page",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceReactions",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get emoji reactions on Confluence content",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get one Confluence space by id or key, including enabled content types, optional labels, and instructions when configured.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "includeLabels",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceSpaceInstructions",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get the space instructions for a Confluence space",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "body_format",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceTask",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get a single Confluence inline task by its ID",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "taskId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getConfluenceTemplate",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Get a Confluence template body",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "templateId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceAttachments",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List attachment metadata for a Confluence content item",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "mediaType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "filename",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceComments",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List comments on a Confluence page or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "content-id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "comment-type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "resolution-status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "body-format",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "include-replies",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "content-type",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List Confluence content of one type within a single space (page, blog, live doc, whiteboard, database, embed, smart link, folder, slide)",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceContentVersions",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List version history for a Confluence page, live doc, or blog post, newest first",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceSpaces",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List Confluence spaces accessible to the caller",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ids",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "keys",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "labels",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceTasks",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List Confluence inline tasks, optionally scoped to a page or blog post and filtered by status",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "page-id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "blogpost-id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "assigned-to",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "created-by",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "completed-by",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listConfluenceTemplates",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "List Confluence templates and blueprints",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "space_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "scope",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "template_type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "manageConfluenceApproval",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Request, decide, cancel, clear, or update a Confluence page approval.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentStatus",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reviewId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "reviewers",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "addReviewers",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "removeReviewers",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "dueDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "clearDueDate",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "moveConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Move a Confluence page, whiteboard, database, folder, or embed to a new parent or sibling position",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "position",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "targetId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "removeConfluenceContentPermissions",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Removes content-level permission grants from a single Confluence content entity.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "principal-type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "principal-id",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "reopenConfluenceTask",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Reopen a completed Confluence inline task (mark it incomplete)",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "taskId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "replaceConfluenceContentPermissions",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Replaces ALL content-level permission grants on a single Confluence content entity with the supplied set.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "permissions",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "resolveConfluenceContentMacros",
+      "product": "confluence",
+      "executeTool": "executeRead",
+      "description": "Resolve supported Confluence macro wrappers into per-macro HTML displayed in Confluence web.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "macroIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "all",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "restoreConfluenceContentVersion",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Restore an earlier version of a Confluence page, live doc, or blog post as a new latest version",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "versionNumber",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "restoreTitle",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "setConfluenceContentRestrictionState",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Sets the high-level restriction state for a single Confluence content entity.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "setConfluenceContentStatus",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Set the content state (status) of a Confluence page or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "id",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "color",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "setConfluenceSpaceInstructions",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Set the space instructions for a Confluence space",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "body_format",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "starConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Star a Confluence content item for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "starConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Star a Confluence space for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "unarchiveConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Unarchive (restore) a single Confluence content entity",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "unstarConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Remove a star from a Confluence content item for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "unstarConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Remove a star from a Confluence space for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "unwatchConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Stop watching a Confluence content item for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "unwatchConfluenceLabel",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Stop watching a Confluence label for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "labelName",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "unwatchConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeDestructive",
+      "description": "Stop watching a Confluence space for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateConfluenceComment",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Update an existing Confluence footer or inline comment on a page or blog post",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "commentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "commentType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expectedVersion",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateConfluenceCommentResolution",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Resolve or reopen a Confluence footer or inline comment",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "commentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "resolved",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "commentType",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "watchConfluenceContent",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Start watching a Confluence content item for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "watchConfluenceLabel",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Start watching a Confluence label for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "labelName",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "watchConfluenceSpace",
+      "product": "confluence",
+      "executeTool": "executeWrite",
+      "description": "Start watching a Confluence space for the current user",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spaceKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createFocusArea",
+      "product": "focus",
+      "executeTool": "executeWrite",
+      "description": "Create a new Focus area in a workspace.",
+      "inputs": [
+        {
+          "name": "focusAreaTypeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "parentFocusAreaIdentifier",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "targetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "owner",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createFocusAreaStatusUpdate",
+      "product": "focus",
+      "executeTool": "executeWrite",
+      "description": "Create a status update on a focus area, or save it as a draft.",
+      "inputs": [
+        {
+          "name": "focusAreaIdentifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "isDraft",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "statusTransition",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "newTargetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getFocusArea",
+      "product": "focus",
+      "executeTool": "executeRead",
+      "description": "Get a focus area by identifier, with optional expansions.",
+      "inputs": [
+        {
+          "name": "focusAreaIdentifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getFocusAreaTypes",
+      "product": "focus",
+      "executeTool": "executeRead",
+      "description": "Get the configured Focus area type hierarchy for a workspace.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "linkToFocusArea",
+      "product": "focus",
+      "executeTool": "executeWrite",
+      "description": "Link one of either goals, work items, or sub-focus areas to a focus area.",
+      "inputs": [
+        {
+          "name": "focusAreaIdentifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "connection",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "searchFocusAreas",
+      "product": "focus",
+      "executeTool": "executeRead",
+      "description": "Search focus areas using text and structured filters with optional pagination and sorting.",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "filters",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "include",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "updateFocusArea",
+      "product": "focus",
+      "executeTool": "executeWrite",
+      "description": "Update one or more fields on an existing Focus area.",
+      "inputs": [
+        {
+          "name": "focusAreaIdentifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "owner",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "addConnectionsToGoals",
+      "product": "goals",
+      "executeTool": "executeWrite",
+      "description": "Add one type of connection to one or more Atlassian Goals.",
+      "inputs": [
+        {
+          "name": "goalIds",
+          "type": "array",
+          "required": true
+        },
+        {
+          "name": "connection",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createGoal",
+      "product": "goals",
+      "executeTool": "executeWrite",
+      "description": "Create an Atlassian Goal or Success Measure using an enabled Goal Type.",
+      "inputs": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "goalTypeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ownerAccountId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "parentGoalId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "targetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "accessLevel",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createGoalUpdate",
+      "product": "goals",
+      "executeTool": "executeWrite",
+      "description": "Create a progress update for an existing Atlassian Goal.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "goalId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "phaseStatus",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "score",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "targetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "notes",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "metricUpdates",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "highlights",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getGoal",
+      "product": "goals",
+      "executeTool": "executeRead",
+      "description": "Retrieve one Atlassian Goal by its exact Goal ARI or key, with optional related details.",
+      "inputs": [
+        {
+          "name": "identifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "subGoalKind",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "highlightType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "noUpdateAttached",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "limits",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cursors",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getGoalTypes",
+      "product": "goals",
+      "executeTool": "executeRead",
+      "description": "Get the Goal Types available in an Atlassian site for creating Goals and Success Measures.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "includeDisabled",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getGoalUpdate",
+      "product": "goals",
+      "executeTool": "executeRead",
+      "description": "Retrieve one Atlassian Goal update by its exact Goal Update ARI, with optional related details.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "updateId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limits",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cursors",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "searchGoals",
+      "product": "goals",
+      "executeTool": "executeRead",
+      "description": "Find Atlassian Goals by text and structured filters.",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "filters",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "addOrEditJiraIssueWorklog",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Log time spent on a Jira issue, or edit an existing worklog: omit worklogId to add, or pass one from listJiraIssueWorklogs to edit, which changes only the fields you pass.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "timeSpent",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "contentFormat",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "started",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "visibility",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "worklogId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "convertJiraIssueHierarchy",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Convert an existing Jira issue across hierarchy levels: a standard issue (Task, Bug, Story) into a sub-task under a parent, or a sub-task back into a standard issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "targetIssueType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "parentIssueKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "targetProjectKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fieldRemap",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "confirm",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "acknowledgeChildReparent",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "acknowledgeMove",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createJiraBoard",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Create a new company-managed Jira Software board (scrum or kanban) from an existing filter.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "filterId",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "location",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createJiraIssueLink",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Create a link between two existing issues — blocks, duplicates, clones, relates.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "linkType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "inwardIssue",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "outwardIssue",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "comment",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createJiraIssueRemoteIssueLink",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Create a native web link in a Jira issue's Web links section for a Confluence page or external HTTP(S) URL.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "relationship",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "downloadJiraIssueAttachment",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get a short-lived download URL for a Jira attachment and return a local downloadCommand.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attachmentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "outputPath",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "editJiraEntityProperty",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Sets a single property (technical key/value store) on a specific Jira entity (issue, issueComment, issueWorklog, dashboardItem, user), creating or overwriting it.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "entityType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "propertyKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "value",
+          "type": "any",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "commentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "worklogId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "dashboardId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "itemId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraBoardConfig",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Returns the configuration for a Jira board; filter, column layout, and each column's mapped statuses with their id, name and category.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "boardId",
+          "type": "number",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getJiraBoardIssueData",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get the issues on a Jira board, its backlog, or all of them, with optional count and JQL filtering.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "boardId",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "dataset",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "searchResultMode",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "jql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "fields",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "nextPageToken",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "responseContentFormat",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraBoardSprintData",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Resolve a Jira board plus its sprint data in one call.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "boardId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "boardName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "projectKeyOrId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "boardType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "sprintId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "sprintName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "includeIssues",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraCurrentUser",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get the calling user's own Jira profile.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraEntityProperty",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Returns a single property (technical key/value store) from a specific Jira entity (issue, issueComment, issueWorklog, dashboardItem, user), or lists all its property keys when propertyKey is omitted.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "entityType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "propertyKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "commentId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "worklogId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "dashboardId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "itemId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraIssueTypeMetaWithFields",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Returns the schema and field metadata for a specific issue type in a project, useful for creating issues with correct fields.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueTypeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "requiredFieldsOnly",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraProjectVersionRelatedWork",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the related work on a Jira project version (release): the designs, test plans, runbooks and change records teams attach to it.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "versionId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getJiraProjectVersions",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List a Jira project's releases/versions (pass projectIdOrKey), or fetch a single version (pass versionId) — provide exactly one.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectIdOrKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "versionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJiraUser",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get a Jira user's profile by account ID, including time zone, locale and active status, plus groups and application roles when asked for via expand.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraDashboards",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Returns Jira dashboards visible to the current user for discovery and linking workflows.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "dashboardName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "groupname",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "groupId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "projectId",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraFilters",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Search saved Jira filters visible to the current user, returning their IDs and JQL.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "filterName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "projectId",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "id",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueAssignableUsers",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the users who can actually be assigned work in a project or on an issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "project",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "issueKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "actionSource",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueChangelogs",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get a Jira issue's field-change history — field edits only — paginated oldest-first with no ordering options.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueComments",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get a paginated list of comments for a Jira issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "responseContentFormat",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "reactionDetail",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueLinkTypes",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the issue link types configured on this site, each with its name and its inward and outward wording (name \"Blocks\", inward \"is blocked by\", outward \"blocks\").",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueRemoteIssueLinks",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the Confluence pages and external URLs linked from an issue's Web links section.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "globalId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueTransitions",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the workflow transitions this issue can take right now, for the calling user.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "transitionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "skipRemoteOnlyCondition",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "includeUnavailableTransitions",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "sortByOpsBarAndStatus",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "actionSource",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraIssueWorklogs",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Get a paginated list of worklogs (logged time) for a Jira issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "startedAfter",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "startedBefore",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "responseContentFormat",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraProjectComponents",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List a Jira project's components with their ids, names, lead and assignee settings, and issueCount — 0 means no issues use a Jira component; Compass results list only components already linked to i...",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "componentSource",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraProjectIssueTypesMetadata",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Returns all issue types available in a Jira project, useful for knowing which issue types can be created.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraProjects",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Find the Jira projects the calling user can see — use it to resolve the projectKey that createJiraIssue requires, or the project a JQL search filters on.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraStatuses",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List the statuses a Jira issue can be in — for a project (per work type), for one status looked up by ID or name, or across the whole site by name or category.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "issueType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "statusIdOrName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "nameContains",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "statusCategory",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "lookupJiraAccountId",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "Look up a Jira user account ID by display name or email — skip it if you already have the accountId.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "actionSource",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "manageJiraProjectVersion",
+      "product": "jira",
+      "executeTool": "executeDestructive",
+      "description": "Create, update, release, or archive a Jira project version (release or fix version). create returns the version id the other actions need.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectIdOrKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "versionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "releaseDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "released",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "archived",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "driver",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "moveUnfixedIssuesTo",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "manageJiraProjectVersionRelatedWork",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Create or update related work links on a Jira project version (release).",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "versionId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "relatedWorkId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "uploadAttachmentToJiraIssue",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Attach a single local file to a Jira issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fileId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "approveJsmRequestResolverPlans",
+      "product": "jsm",
+      "executeTool": "executeWrite",
+      "description": "Approve the current Request Resolver plans for explicitly selected JSM issue keys after the user has reviewed their plans with getJsmRequestResolverPlans and confirmed approval.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueKeys",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createJsmRequest",
+      "product": "jsm",
+      "executeTool": "executeWrite",
+      "description": "Create a Jira Service Management customer-request work item using an explicit JSM service desk ID, JSM request type ID, and request field values.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "serviceDeskId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "requestTypeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "requestFieldValues",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "form",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "decideJsmRequestApproval",
+      "product": "jsm",
+      "executeTool": "executeWrite",
+      "description": "Approve or decline a pending approval on an existing Jira Service Management request.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "decision",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "approvalId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmAgentAvailability",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Read Jira Service Management Workforce Management availability for agents in a service project.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "teamIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "agentIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "statuses",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "includeAgents",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "includeSelf",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmOpsAlerts",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Get one Jira Service Management Operations alert by ID or alias, or list and search alerts with optional query, time window, and pagination.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "alias",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "from",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "to",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "size",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmOpsScheduleInfo",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Get Jira Service Management Operations schedule information: list schedules, get a specific schedule by ID, or retrieve current or next on-call responders for a schedule.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "scheduleId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "size",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "next",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "flat",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmOpsTeamInfo",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Get Jira Service Management Operations team information: list all teams or get escalation policies for a specific team.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "teamId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "size",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmRequest",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Get details and the current customer-facing state of an existing Jira Service Management (JSM) customer request by issue key or ID.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmRequestActionMetadata",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Discover customer-visible request-portal actions for an existing Jira Service Management request before a follow-up write.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "serviceDeskId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "requestTypeId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getJsmRequestCreationOptions",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Prepare creation of a Jira Service Management customer-request work item for a project.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectKey",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getJsmRequestResolverPlans",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Retrieve a concise snapshot of Request Resolver plans for selected Jira Service Management requests by issue key or ID.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdsOrKeys",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getJsmRequestTypeFields",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Get field IDs, required flags, and allowed values for selected Jira Service Management work-item request type.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "serviceDeskId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "requestTypeId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "searchJsmRequests",
+      "product": "jsm",
+      "executeTool": "executeRead",
+      "description": "Search one bounded page of caller-visible Jira Service Management requests.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "jql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "nextPageToken",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "setJsmAgentAvailability",
+      "product": "jsm",
+      "executeTool": "executeWrite",
+      "description": "Set one Jira Service Management Workforce Management agent's availability for a service project.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "agentAccountId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "transitionJsmRequest",
+      "product": "jsm",
+      "executeTool": "executeDestructive",
+      "description": "Perform one customer/request-portal-visible Jira Service Management request transition selected from getJsmRequestActionMetadata.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "transitionId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "additionalComment",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateJsmOpsAlert",
+      "product": "jsm",
+      "executeTool": "executeWrite",
+      "description": "Update one Jira Service Management Operations alert by acknowledging, unacknowledging, closing, or escalating it.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "alertId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "escalationId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "pollStatus",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createLoomFolder",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Create a new folder in the current Loom workspace, optionally nested under a parent folder or placed in a space.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "parentFolderId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "visibility",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createLoomVideoComment",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Post a comment on a Loom video, anchored to a specific point in the video.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "timestamp",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "content",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createLoomVideoReaction",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Add an emoji reaction to a Loom video, anchored to a specific point in the video.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "timestamp",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "reactionName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reactionType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createLoomVideoUpload",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Step 1 of 2 for uploading a new video to Loom.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fileName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "contentType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fileSizeBytes",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getLoomVideoDownloadUrl",
+      "product": "loom",
+      "executeTool": "executeRead",
+      "description": "Get a time-limited signed URL to download the actual MP4 file of a Loom video.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listLoomFolders",
+      "product": "loom",
+      "executeTool": "executeRead",
+      "description": "List the folders in the current Loom workspace that a video can be moved into, returning each folder's id, name, and parent space.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listLoomVideos",
+      "product": "loom",
+      "executeTool": "executeRead",
+      "description": "List the Loom videos you own (that you created), most recent first.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sortOrder",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "createdAtFrom",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "createdAtTo",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listLoomVideosSharedWithMe",
+      "product": "loom",
+      "executeTool": "executeRead",
+      "description": "List the Loom videos that other people have shared with you, most recent first.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sortOrder",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "createdAtFrom",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "createdAtTo",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "moveLoomVideoToFolder",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Move a Loom video into a folder in the current workspace.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "folderId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "publishLoomVideo",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Step 2 of 2 for uploading a new video to Loom.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "keyPath",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fileName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "folderId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "spaceId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "recoverLoomVideo",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Recover a Loom video that failed to process, by initiating a recovery job to re-process it.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "shareLoomVideo",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Share a Loom video with one or more specific Atlassian users by sending them a notification (with an optional message).",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "userAris",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "recipientQueries",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateLoomVideoPermissions",
+      "product": "loom",
+      "executeTool": "executeDestructive",
+      "description": "Change who can access a Loom video by setting its visibility to OWNER (only you), WORKSPACE (anyone in your workspace), or PUBLIC (anyone with the link).",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "visibility",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "updateLoomVideoTitle",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Rename a Loom video.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "videoAri",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "videoUrl",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "addConnectionsToProjects",
+      "product": "projects",
+      "executeTool": "executeWrite",
+      "description": "Add one type of connection to one or more Atlassian Projects.",
+      "inputs": [
+        {
+          "name": "projectIds",
+          "type": "array",
+          "required": true
+        },
+        {
+          "name": "connection",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createProject",
+      "product": "projects",
+      "executeTool": "executeWrite",
+      "description": "Create an Atlassian Project.",
+      "inputs": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "ownerAccountId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "targetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "private",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createProjectUpdate",
+      "product": "projects",
+      "executeTool": "executeWrite",
+      "description": "Post a progress update on an existing Atlassian Project, or save it as an unposted draft with isDraft.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "projectId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "isDraft",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "phaseStatus",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "targetDate",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "notes",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "highlights",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getProject",
+      "product": "projects",
+      "executeTool": "executeRead",
+      "description": "Retrieve one Atlassian Project by its exact Project ARI or key, with optional related details.",
+      "inputs": [
+        {
+          "name": "identifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "updateFilters",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "linkType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "highlightType",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "noUpdateAttached",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "limits",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cursors",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getProjectUpdate",
+      "product": "projects",
+      "executeTool": "executeRead",
+      "description": "Retrieve one Atlassian Project update by its exact Project Update ARI, with optional related details.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "updateId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "include",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limits",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "cursors",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "searchProjects",
+      "product": "projects",
+      "executeTool": "executeRead",
+      "description": "Find Atlassian Projects by text and structured filters.",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "filters",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "getContentFormatGuide",
+      "product": "system",
+      "executeTool": "executeRead",
+      "description": "Get the content-format guide for authoring a rich content body or constructing a Confluence Remix prompt.",
+      "inputs": [
+        {
+          "name": "toolName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reference",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTalentFields",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "Discover the workspace's queryable Talent fields, or resolve the valid filter values for a specific field.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fieldId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "rql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTalentGroupMetrics",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "Aggregate Talent positions into COUNTS grouped by one to four position field IDs — headcount by country, by status, by level, by job family, by manager, or any nesting of those.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "groupingFieldIds",
+          "type": "array",
+          "required": true
+        },
+        {
+          "name": "rql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTalentPosition",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "Read a single Talent position by its ARI, returning its selected position field values and, optionally, field values for the worker filling it.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "positionAri",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "positionFieldIdIsIn",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "workerFieldIdIsIn",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTalentPositionsByEntity",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "List the Talent positions attached to an entity — the direct reports of a manager position (entity=position with that manager's ARI as fieldValue), or the positions rolled up to a focus area (entit...",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "entity",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fieldValue",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "rql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "aggregateRql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "before",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fieldIdIsIn",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTalentUser",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "Resolve the calling user's own place in the Talent workspace: their position entity ID, their manager's position entity ID, and their role.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "searchTalentPositions",
+      "product": "talent",
+      "executeTool": "executeRead",
+      "description": "Search Talent positions by their own attributes using an RQL filter, returning a paginated list of positions with their requested field values (each position's ARI is the `id`, so this is how you o...",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "rql",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "fieldIdIsIn",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateTalentPositionFocusAreaMappings",
+      "product": "talent",
+      "executeTool": "executeWrite",
+      "description": "Allocate Talent positions to focus areas, or clear the focus area a position is allocated to.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "mappings",
+          "type": "array",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "createTeam",
+      "product": "teams",
+      "executeTool": "executeWrite",
+      "description": "Create an Atlassian team with a bounded name, optional description, MEMBER_INVITE or OPEN membership settings, and up to 50 initial account IDs.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "displayName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "membershipSettings",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "members",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getTeam",
+      "product": "teams",
+      "executeTool": "executeRead",
+      "description": "Get core metadata for one Atlassian team.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "teamId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "expand",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "membersFirst",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "membersAfter",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "hierarchyChildrenFirst",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "hierarchyChildrenAfter",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "searchTeams",
+      "product": "teams",
+      "executeTool": "executeRead",
+      "description": "Search Atlassian teams by name with cursor pagination.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "first",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "membersFirst",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "membersAfter",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "updateTeam",
+      "product": "teams",
+      "executeTool": "executeDestructive",
+      "description": "Update one Atlassian team through exactly one operation.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "teamId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "displayName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "membershipSettings",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "accountIds",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "emails",
+          "type": "array",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "getMyWork",
+      "product": "twg",
+      "executeTool": "executeRead",
+      "description": "Read the signed-in user's recent Jira, Confluence, Goals, Projects and Loom activity on one site.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "product",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sinceDays",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

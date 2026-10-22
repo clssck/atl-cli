@@ -1,4 +1,4 @@
-import { planOf } from "./write.ts";
+import { planOf, requireYes } from "./write.ts";
 import { Type } from "../core/schema.ts";
 import { authStatus } from "../auth/index.ts";
 import { discover } from "../auth/discovery.ts";
@@ -13,6 +13,7 @@ import { AtlError, type NextCommand } from "../core/errors.ts";
 import { isRecord } from "../core/guards.ts";
 import { keepRaw } from "../core/output.ts";
 import {
+  API_ORIGIN,
   buildUrl,
   type FetchLike,
   type HttpClient,
@@ -20,7 +21,7 @@ import {
   type Query,
 } from "../core/http.ts";
 import { configDir } from "../core/paths.ts";
-import { API_ORIGIN, createHttpClient, openSession, refreshSites } from "../core/session.ts";
+import { createHttpClient, openSession, refreshSites } from "../core/session.ts";
 import { parseSite } from "../resolve/index.ts";
 import { VERSION } from "../version.ts";
 
@@ -264,7 +265,7 @@ export async function runWhoami(ctx: CommandContext, deps: SiteDeps = {}): Promi
 const whoami = defineCommand({
   name: "whoami",
   summary: "Show the authenticated Atlassian account",
-  mcpTools: ["atlassianUserInfo"],
+  mcpTools: ["atlassianUserInfo", "getJiraCurrentUser"],
   args: [],
   flags: Type.Object({}),
   sideEffects: "none",
@@ -378,13 +379,8 @@ export async function runApi(
     ...(flags.bodyFile === undefined ? [] : ["--body-file", flags.bodyFile]),
     ...extra,
   ];
-  if (!readOnly && flags.yes !== true && !ctx.plan) {
-    throw new AtlError(`${method} ${path} changes data and needs confirmation`, {
-      code: "confirmation_required",
-      category: "input",
-      hint: "Preview with --plan, then re-run with --yes.",
-      next: [argv("--plan")],
-    });
+  if (!readOnly) {
+    requireYes(ctx, flags.yes, `${method} ${path}`, argv("--plan"));
   }
 
   let url: string;

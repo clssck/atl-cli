@@ -1395,6 +1395,12 @@ function optionalText(value: Json, key: string): string | null {
   return typeof field === "string" || typeof field === "number" ? String(field) : null;
 }
 
+/** `page get` reports its parent as `parent: {id, title}`. */
+function parentIdOf(page: Json): string | null {
+  const parent = page.parent;
+  return isRecord(parent) && typeof parent.id === "string" ? parent.id : null;
+}
+
 function itemsOf(value: Json): Json[] {
   return Array.isArray(value.items) ? value.items.filter(isRecord) : [];
 }
@@ -1878,11 +1884,13 @@ async function verifyNeedles(plan: Plan, state: State): Promise<Needle[]> {
         if (leaf.authorId !== state.owner.accountId) {
           problems.push(`author is ${String(leaf.authorId)}`);
         }
-        if (optionalText(leaf, "parentId") !== lanternParentId) {
-          problems.push(`parent is ${String(leaf.parentId)}`);
+        const leafParent = parentIdOf(leaf);
+        if (leafParent !== lanternParentId) {
+          problems.push(`parent is ${String(leafParent)}`);
         }
-        if (optionalText(parent, "parentId") !== archId) {
-          problems.push(`grandparent is ${String(parent.parentId)}`);
+        const grandparent = parentIdOf(parent);
+        if (grandparent !== archId) {
+          problems.push(`grandparent is ${String(grandparent)}`);
         }
         return problems;
       },

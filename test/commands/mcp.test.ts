@@ -13,8 +13,11 @@ import {
 } from "../../src/core/cli.ts";
 import { saveConfig } from "../../src/core/config.ts";
 import { AtlError } from "../../src/core/errors.ts";
+import type { FetchLike } from "../../src/core/http.ts";
+import { isRecord } from "../../src/core/guards.ts";
 import { fakeMcp, textResult, type FakeMcp } from "../helpers/mcp.ts";
 import { makeContext } from "../helpers/context.ts";
+import { importToken } from "../../src/auth/index.ts";
 
 const CLOUD = "11111111-2222-3333-4444-555555555555";
 
@@ -182,6 +185,148 @@ describe("mcp tools", () => {
   test("closes the session", async () => {
     await run("mcp.tools");
     expect(server.calls.at(-1)?.method).toBe("DELETE");
+  });
+});
+
+const operation = (name: string, product: string, description: string) => ({
+  name,
+  product,
+  executeTool: "executeRead",
+  description,
+  inputs: [
+    { name: "cloudId", type: "string", required: true, description: "Cloud id", minLength: 1 },
+    { name: "limit", type: "number", required: false, maximum: 100 },
+  ],
+});
+
+describe("mcp tools --catalog", () => {
+  const V2 = "https://mcp.atlassian.com/v2/mcp";
+  const primary = ["getJiraIssue", "discover", "executeRead"].map((name) => ({
+    name,
+    inputSchema: { type: "object", properties: {} },
+  }));
+  const OPERATIONS = [
+    operation("zetaThing", "jira", "Zeta.\nSecond line."),
+    operation("alphaThing", "jira", `${"Long sentence ".repeat(20)}.`),
+    operation("getAsset", "assets", "Get an asset. Do not use for lists."),
+  ];
+
+  /** Primary listing and `?tools=all` listing from two fake servers; `discover` answers by query. */
+  function v2Fetch(discover: (query: string) => unknown): FetchLike {
+    const base = fakeMcp({ tools: primary });
+    const all = fakeMcp({
+      tools: [
+        ...primary,
+        ...OPERATIONS.map(({ name }) => ({ name, inputSchema: { type: "object" } })),
+      ],
+    });
+    return (url, init) => {
+      if (url.includes("tools=all")) {
+        return all.fetch(url, init);
+      }
+      const rpc: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      if (isRecord(rpc) && rpc.method === "tools/call") {
+        const query =
+          isRecord(rpc.params) && isRecord(rpc.params.arguments)
+            ? rpc.params.arguments.query
+            : undefined;
+        const text = `${JSON.stringify(discover(String(query)))}\n\nalso matched (1 more):\n  x — y`;
+        return Promise.resolve(
+          new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: textResult(text) }), {
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return base.fetch(url, init);
+    };
+  }
+
+  const byName = (query: string) => ({
+    results: [
+      operation("decoy", "jira", "Not this one."),
+      ...OPERATIONS.filter(({ name }) => name === query),
+    ],
+  });
+
+  test("emits the operations-v2.json shape, sorted by product then name", async () => {
+    mcpDeps.fetch = v2Fetch(byName);
+    const catalog = await run(
+      "mcp.tools",
+      {},
+      { catalog: true },
+      { env: { ...ctx.env, ATL_MCP_URL: V2 } },
+    );
+    expect(catalog).toEqual({
+      generatedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/),
+      endpoint: V2,
+      count: 3,
+      operations: [
+        {
+          name: "getAsset",
+          product: "assets",
+          executeTool: "executeRead",
+          description: "Get an asset.",
+          inputs: [
+            { name: "cloudId", type: "string", required: true },
+            { name: "limit", type: "number", required: false },
+          ],
+        },
+        {
+          name: "alphaThing",
+          product: "jira",
+          executeTool: "executeRead",
+          description: `${"Long sentence ".repeat(20).replaceAll(/\s+/g, " ").slice(0, 197)}...`,
+          inputs: [
+            { name: "cloudId", type: "string", required: true },
+            { name: "limit", type: "number", required: false },
+          ],
+        },
+        {
+          name: "zetaThing",
+          product: "jira",
+          executeTool: "executeRead",
+          description: "Zeta.",
+          inputs: [
+            { name: "cloudId", type: "string", required: true },
+            { name: "limit", type: "number", required: false },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("rejects an endpoint without discover", async () => {
+    const error = await rejection(run("mcp.tools", {}, { catalog: true }));
+    expect(error.code).toBe("catalog_unsupported");
+  });
+
+  test("fails when discover does not return an operation by name", async () => {
+    mcpDeps.fetch = v2Fetch((query) => byName(query === "zetaThing" ? "none" : query));
+    const error = await rejection(
+      run("mcp.tools", {}, { catalog: true }, { env: { ...ctx.env, ATL_MCP_URL: V2 } }),
+    );
+    expect(error.code).toBe("catalog_incomplete");
+    expect(error.message).toContain("zetaThing");
+  });
+
+  test("cannot be combined with --snapshot", async () => {
+    const error = await rejection(run("mcp.tools", {}, { catalog: true, snapshot: true }));
+    expect(error.code).toBe("conflicting_flags");
+  });
+
+  test("--catalog and --snapshot refuse a stored login made for another resource", async () => {
+    const { ATL_ACCESS_TOKEN: _envToken, ...stored } = ctx.env;
+    const claims = { exp: Math.floor(Date.now() / 1000) + 3600 };
+    await importToken(`e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`, {
+      env: stored,
+    });
+    const v2 = { env: { ...stored, ATL_MCP_URL: V2 } };
+    expect((await rejection(run("mcp.tools", {}, { catalog: true }, v2))).code).toBe(
+      "resource_mismatch",
+    );
+    expect((await rejection(run("mcp.tools", {}, { snapshot: true }, v2))).code).toBe(
+      "resource_mismatch",
+    );
   });
 });
 
@@ -417,10 +562,10 @@ describe("get", () => {
   test("a page URL with focusedCommentId and a comment ARI go to comment.get", async () => {
     const url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Title?focusedCommentId=789";
     const ari = "ari:cloud:confluence:11111111-2222-3333-4444-555555555555:comment/789";
-    await get(url, { inline: true });
+    await get(url, { kind: "inline" });
     await get(ari);
     expect(seen).toEqual([
-      { command: "comment.get", args: { comment: url }, flags: { inline: true } },
+      { command: "comment.get", args: { comment: url }, flags: { kind: "inline" } },
       { command: "comment.get", args: { comment: ari }, flags: {} },
     ]);
   });

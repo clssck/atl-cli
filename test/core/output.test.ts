@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import {
   formatJson,
   LINE_BUDGET,
   isPretty,
   keepRaw,
-  parseFieldList,
   project,
   prune,
+  quietOnClosedStdout,
+  splitList,
   writeDiagnostic,
 } from "../../src/core/output.ts";
 
@@ -60,6 +62,69 @@ describe("project", () => {
 
   test("projects a top-level array per element", () => {
     expect(project([{ a: 1, b: 2 }, { a: 3 }], ["a"])).toEqual([{ a: 1 }, { a: 3 }]);
+  });
+
+  test("a list item without the path stays in the list as {} through prune", () => {
+    const result = {
+      items: [{ key: "A-1", parent: { key: "A-0" } }, { key: "A-2" }],
+      nextCursor: "c",
+    };
+    expect(prune(project(result, ["parent.key"]))).toEqual({
+      items: [{ parent: { key: "A-0" } }, {}],
+      nextCursor: "c",
+    });
+    expect(prune(project([{ a: 1 }, { b: 2 }], ["a"]))).toEqual([{ a: 1 }, {}]);
+  });
+
+  test("asking only for envelope fields drops the items instead of printing {} placeholders", () => {
+    const result = { items: [{ seconds: 1 }, { seconds: 2 }], totalSeconds: 3, nextCursor: "c" };
+    expect(prune(project(result, ["totalSeconds"]))).toEqual({ totalSeconds: 3, nextCursor: "c" });
+    expect(prune(project(result, ["totalSeconds", "seconds"]))).toEqual({
+      items: [{ seconds: 1 }, { seconds: 2 }],
+      totalSeconds: 3,
+      nextCursor: "c",
+    });
+  });
+
+  test("an items. prefix addresses the items, unless items carry their own items field", () => {
+    const result = { items: [{ key: "A-1", n: 1 }, { key: "A-2" }], nextCursor: "c" };
+    expect(project(result, ["items.key"])).toEqual({
+      items: [{ key: "A-1" }, { key: "A-2" }],
+      nextCursor: "c",
+    });
+    const nested = { items: [{ items: [{ id: 1, x: 2 }], id: 9 }] };
+    expect(project(nested, ["items.id"])).toEqual({ items: [{ items: [{ id: 1 }] }] });
+  });
+
+  test("numeric segments index arrays and keep the index as the key", () => {
+    const value = { tiers: [{ rps: 1 }, { limits: { burst: { rps: 340 } } }] };
+    expect(project(value, ["tiers.1.limits.burst.rps"])).toEqual({
+      tiers: { "1": { limits: { burst: { rps: 340 } } } },
+    });
+    expect(project(value, ["tiers.5.rps"])).toEqual({});
+  });
+
+  test("values picked out of a raw payload keep nulls and empties through prune", () => {
+    const raw = keepRaw({ value: { fallback: { chain: ["a", ["b", { d: null }]], none: [] } } });
+    expect(prune(project(raw, ["value.fallback"]))).toEqual({
+      value: { fallback: { chain: ["a", ["b", { d: null }]], none: [] } },
+    });
+    expect(prune(project(raw, ["value.fallback.chain", "value.fallback.none"]))).toEqual({
+      value: { fallback: { chain: ["a", ["b", { d: null }]], none: [] } },
+    });
+  });
+
+  test("paths that match nothing in the whole result are reported once", () => {
+    const reported: string[][] = [];
+    const onUnmatched = (paths: string[]) => reported.push(paths);
+    project({ items: [{ key: "A" }, { key: "B", n: 1 }] }, ["key", "n", "nope"], onUnmatched);
+    expect(reported).toEqual([["nope"]]);
+    reported.length = 0;
+    project({ items: [{ key: "A" }] }, ["key"], onUnmatched);
+    project({ items: [] }, ["key"], onUnmatched);
+    project({ items: [{ key: "A" }], nextCursor: "c" }, ["nextCursor"], onUnmatched);
+    project({ comments: [{ id: 1 }] }, ["comments.nope"], onUnmatched);
+    expect(reported).toEqual([["comments.nope"]]);
   });
 });
 
@@ -115,6 +180,56 @@ describe("output formatting", () => {
     expect(text.split("\n")).toHaveLength(2);
   });
 
+  test("a line whose enclosing brackets would pass the budget is split", () => {
+    // 699 bytes inline fit, but the `]}` that close the list land on the same line: 701 bytes.
+    const last = { a: "x".repeat(300), b: "y".repeat(384) };
+    expect(Buffer.byteLength(JSON.stringify(last))).toBe(LINE_BUDGET - 1);
+    const value = { items: [{ id: "first" }, last] };
+    const text = formatJson(value, false);
+    expect(JSON.parse(text)).toEqual(value);
+    for (const line of text.split("\n")) {
+      expect(Buffer.byteLength(line)).toBeLessThanOrEqual(LINE_BUDGET);
+    }
+  });
+
+  test("invisible characters are escaped and parse back identical", () => {
+    const value = {
+      id: "ACME\u200B-7731",
+      title: "Restart\u00A0Procedure\u00AD",
+      flip: "a\u202Eb\u2066c\u2069\uFEFF\u180E\u2060\u2064\u200F\u2028",
+      tag: "x\u{E0041}",
+      "k\u200Dey": "plain é 日本",
+    };
+    for (const pretty of [false, true]) {
+      const text = formatJson(value, pretty);
+      expect(text).not.toMatch(
+        /[\u00A0\u00AD\u180E\u2000-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/u,
+      );
+      expect(text).not.toMatch(/[\u{E0000}-\u{E007F}]/u);
+      expect(JSON.parse(text)).toEqual(value);
+    }
+    expect(formatJson({ a: "x\u200By" }, false)).toBe('{"a":"x\\u200by"}');
+    expect(formatJson({ a: "plain é 日本" }, false)).toBe('{"a":"plain é 日本"}');
+  });
+
+  test("escaped characters count at their escaped width when splitting", () => {
+    const value = { items: Array.from({ length: 6 }, () => ({ t: "\u200B".repeat(100) })) };
+    for (const line of formatJson(value, false).split("\n")) {
+      expect(Buffer.byteLength(line)).toBeLessThanOrEqual(LINE_BUDGET);
+    }
+  });
+
+  test("a closed stdout (EPIPE) is ignored, any other stream error stays fatal", () => {
+    const stream = new EventEmitter();
+    quietOnClosedStdout(stream);
+    expect(() =>
+      stream.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" })),
+    ).not.toThrow();
+    expect(() => stream.emit("error", Object.assign(new Error("io"), { code: "EIO" }))).toThrow(
+      "io",
+    );
+  });
+
   test("pretty output keeps its indentation for large values", () => {
     const items = Array.from({ length: 40 }, (_, index) => ({ id: index, title: "x".repeat(30) }));
     expect(formatJson(items, true)).toBe(JSON.stringify(items, null, 2));
@@ -135,8 +250,8 @@ describe("output formatting", () => {
     expect(written).toBe('{"type":"error","code":"x"}\n');
   });
 
-  test("parseFieldList trims and drops empties", () => {
-    expect(parseFieldList(" a, b.c ,,d")).toEqual(["a", "b.c", "d"]);
+  test("splitList trims and drops empties", () => {
+    expect(splitList(" a, b.c ,,d")).toEqual(["a", "b.c", "d"]);
   });
 });
 

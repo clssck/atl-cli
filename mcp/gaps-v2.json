@@ -1,0 +1,363 @@
+{
+  "outOfScopeProducts": [
+    "artifacts",
+    "assets",
+    "bitbucket",
+    "capacity-planning",
+    "code-search",
+    "focus",
+    "goals",
+    "jira-align",
+    "jsm",
+    "loom",
+    "projects",
+    "talent",
+    "teams"
+  ],
+  "hiddenOperations": [
+    {
+      "name": "deleteJiraIssue",
+      "product": "jira"
+    },
+    {
+      "name": "deleteJiraComment",
+      "product": "jira"
+    },
+    {
+      "name": "deleteJiraIssueAttachment",
+      "product": "jira"
+    },
+    {
+      "name": "createJiraProject",
+      "product": "jira"
+    },
+    {
+      "name": "updateJiraProject",
+      "product": "jira"
+    },
+    {
+      "name": "getJiraWorkflows",
+      "product": "jira"
+    },
+    {
+      "name": "getJiraWorkflowEditorLink",
+      "product": "jira"
+    },
+    {
+      "name": "getJiraScreen",
+      "product": "jira"
+    },
+    {
+      "name": "updateJiraScreen",
+      "product": "jira"
+    },
+    {
+      "name": "listJiraBoards",
+      "product": "jira"
+    },
+    {
+      "name": "listJiraBoardSprints",
+      "product": "jira"
+    },
+    {
+      "name": "manageJiraSprint",
+      "product": "jira"
+    },
+    {
+      "name": "watchJiraIssue",
+      "product": "jira"
+    }
+  ],
+  "gaps": [
+    {
+      "name": "addConfluenceReaction",
+      "reason": "no-public-api",
+      "evidence": "no REST endpoint for emoji reactions (likes only via v2 read)"
+    },
+    {
+      "name": "addLabelsToConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md C10: needs write:label:confluence (not grantable)"
+    },
+    {
+      "name": "archiveConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 171: archive needs write:confluence-content (classic, not grantable)"
+    },
+    {
+      "name": "completeConfluenceTask",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md: /wiki/api/v2/tasks 401 (read:task:confluence); write:task not grantable"
+    },
+    {
+      "name": "convertConfluenceContentMode",
+      "reason": "no-public-api",
+      "evidence": "live-doc/classic conversion has no public REST endpoint"
+    },
+    {
+      "name": "createConfluenceAttachment",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md C12: write:confluence-file/write:attachment not grantable"
+    },
+    {
+      "name": "createConfluenceInfographicForPage",
+      "reason": "no-public-api",
+      "evidence": "v2-catalog: Rovo/Remix AI feature, no public REST"
+    },
+    {
+      "name": "createConfluenceMauiApp",
+      "reason": "no-public-api",
+      "evidence": "v2-catalog: Rovo/Remix AI feature, no public REST"
+    },
+    {
+      "name": "createConfluenceSpace",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md C18: write:space not grantable"
+    },
+    {
+      "name": "createJiraBoard",
+      "reason": "scope-not-grantable",
+      "evidence": "agile REST /rest/agile/1.0/board GET 401 scope does not match (beyond-mcp `agile_board`, A1); creating a board needs write:board-scope:jira-software (docs, not in atl token); no GraphQL mutation probed"
+    },
+    {
+      "name": "createJiraProject",
+      "reason": "scope-not-grantable",
+      "evidence": "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/ manage_jira; spec POST /project => manage:jira-configuration (Current) | write:project:jira+read:project:jira (Beta); neither in atl token"
+    },
+    {
+      "name": "disableConfluencePublicLink",
+      "reason": "no-public-api",
+      "evidence": "public links managed via internal/GraphQL only; no public REST"
+    },
+    {
+      "name": "discover",
+      "reason": "mcp-internal",
+      "evidence": "tool-catalog search meta tool; no REST/GraphQL counterpart (v2-catalog.md Coverage)"
+    },
+    {
+      "name": "downloadConfluenceAttachment",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md c_att_v2_dl/c_download_real 401 scope does not match"
+    },
+    {
+      "name": "editConfluenceInfographicForPage",
+      "reason": "no-public-api",
+      "evidence": "v2-catalog: Rovo/Remix AI feature, no public REST"
+    },
+    {
+      "name": "editConfluenceMauiApp",
+      "reason": "no-public-api",
+      "evidence": "v2-catalog: Rovo/Remix AI feature, no public REST"
+    },
+    {
+      "name": "enableConfluencePublicLink",
+      "reason": "no-public-api",
+      "evidence": "public links managed via internal/GraphQL only; no public REST"
+    },
+    {
+      "name": "executeDestructive",
+      "reason": "mcp-internal",
+      "evidence": "MCP dispatch wrapper for deferred destructive tools; no REST counterpart (v2-catalog.md)"
+    },
+    {
+      "name": "executeRead",
+      "reason": "mcp-internal",
+      "evidence": "MCP dispatch wrapper for deferred read tools; no REST counterpart (v2-catalog.md)"
+    },
+    {
+      "name": "executeWrite",
+      "reason": "mcp-internal",
+      "evidence": "MCP dispatch wrapper for deferred write tools; no REST counterpart (v2-catalog.md)"
+    },
+    {
+      "name": "exportConfluenceContent",
+      "reason": "no-public-api",
+      "evidence": "no public PDF/Word export REST (only body-format=export_view HTML, c_page_export 200)"
+    },
+    {
+      "name": "getConfluenceApproval",
+      "reason": "no-public-api",
+      "evidence": "page approvals have no public REST API"
+    },
+    {
+      "name": "getConfluenceContentAnalytics",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: 401"
+    },
+    {
+      "name": "getConfluenceContentStatus",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: 401"
+    },
+    {
+      "name": "getConfluenceMauiApp",
+      "reason": "no-public-api",
+      "evidence": "v2-catalog: Rovo/Remix AI feature, no public REST"
+    },
+    {
+      "name": "getConfluencePublicLinkStatus",
+      "reason": "no-public-api",
+      "evidence": "no public REST for public links"
+    },
+    {
+      "name": "getConfluenceReactions",
+      "reason": "no-public-api",
+      "evidence": "emoji reactions not in public REST (likes are: v2 /likes 200)"
+    },
+    {
+      "name": "getConfluenceSpaceInstructions",
+      "reason": "no-public-api",
+      "evidence": "Rovo space instructions have no public REST"
+    },
+    {
+      "name": "getConfluenceTask",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 164: 401"
+    },
+    {
+      "name": "getConfluenceTemplate",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 166: 401"
+    },
+    {
+      "name": "getJiraScreen",
+      "reason": "scope-not-grantable",
+      "evidence": "2026-10-22 beyond-mcp `screens` GET /screens -> 401 scope does not match; `project_issuetypescreen` 401; spec GET /screens, /screens/{id}/tabs, /availableFields => manage:jira-project (Current)"
+    },
+    {
+      "name": "getJiraWorkflowEditorLink",
+      "reason": "no-public-api",
+      "evidence": "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/ manage_jira: returns a Jira workflow editor deep link with a pre-filled change; no REST/GraphQL endpoint produces it"
+    },
+    {
+      "name": "getJiraWorkflows",
+      "reason": "scope-not-grantable",
+      "evidence": "2026-10-22 beyond-mcp `workflow_search` GET /workflows/search -> 401 scope does not match; `workflowscheme_proj` 401; spec => manage:jira-configuration (Current)"
+    },
+    {
+      "name": "getLoomVideo",
+      "reason": "out-of-scope",
+      "evidence": "user scope: Jira and Confluence only"
+    },
+    {
+      "name": "getMyWork",
+      "reason": "no-public-api",
+      "evidence": "2026-10-22 GraphQL activity.myActivity -> 'Auth category: THIRD_PARTY_OAUTH is not allowed in service activity' (allowed: FIRST_PARTY_OAUTH, SESSION, API_TOKEN); no REST counterpart (v2-catalog.md Rovo/Remix list)"
+    },
+    {
+      "name": "listConfluenceTasks",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 164: 401"
+    },
+    {
+      "name": "listConfluenceTemplates",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 166: 401"
+    },
+    {
+      "name": "listJiraBoardSprints",
+      "reason": "scope-not-grantable",
+      "evidence": "2026-10-22 GraphQL jira.sprintSearch -> 'not allowed to be called by third party oauth clients'; agile /board/{id}/sprint 401; needs read:sprint:jira-software"
+    },
+    {
+      "name": "listJiraIssueAssignableUsers",
+      "reason": "scope-not-grantable",
+      "evidence": "2026-10-22 GET /rest/api/3/user/assignable/search?project=KAN -> 401; spec: read:jira-user (Current), not in atl token"
+    },
+    {
+      "name": "manageConfluenceApproval",
+      "reason": "no-public-api",
+      "evidence": "page approvals have no public REST API"
+    },
+    {
+      "name": "manageJiraProjectVersion",
+      "reason": "scope-not-grantable",
+      "evidence": "spec: POST /version and PUT /version/{id} => manage:jira-project (Current) | write:project-version:jira (Beta); eval/.out/beyond-mcp.md line 156 'Version/component create, update, release' needs manage:jira-project; atl token has neither"
+    },
+    {
+      "name": "manageJiraSprint",
+      "reason": "scope-not-grantable",
+      "evidence": "agile sprint writes need write:sprint:jira-software / write:issue:jira-software (beyond-mcp A2, line 155), 401 on the read side; not in atl token; no GraphQL mutation probed"
+    },
+    {
+      "name": "reopenConfluenceTask",
+      "reason": "scope-not-grantable",
+      "evidence": "tasks read already 401; write:task not grantable"
+    },
+    {
+      "name": "setConfluenceContentStatus",
+      "reason": "scope-not-grantable",
+      "evidence": "state read already 401; write needs classic scope"
+    },
+    {
+      "name": "setConfluenceSpaceInstructions",
+      "reason": "no-public-api",
+      "evidence": "Rovo space instructions have no public REST"
+    },
+    {
+      "name": "starConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md c_relation 401 scope does not match"
+    },
+    {
+      "name": "starConfluenceSpace",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md c_relation 401 scope does not match"
+    },
+    {
+      "name": "unarchiveConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 171: archive family needs classic write:confluence-content"
+    },
+    {
+      "name": "unstarConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md c_relation 401 scope does not match"
+    },
+    {
+      "name": "unstarConfluenceSpace",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md c_relation 401 scope does not match"
+    },
+    {
+      "name": "unwatchConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    },
+    {
+      "name": "unwatchConfluenceLabel",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    },
+    {
+      "name": "unwatchConfluenceSpace",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    },
+    {
+      "name": "updateJiraProject",
+      "reason": "scope-not-grantable",
+      "evidence": "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/ manage_jira; spec PUT /project/{k} => manage:jira-project (Current); not in atl token"
+    },
+    {
+      "name": "updateJiraScreen",
+      "reason": "scope-not-grantable",
+      "evidence": "spec POST /screens/{id}/tabs/{tabId}/fields and move => manage:jira-project (Current); not in atl token"
+    },
+    {
+      "name": "watchConfluenceContent",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    },
+    {
+      "name": "watchConfluenceLabel",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    },
+    {
+      "name": "watchConfluenceSpace",
+      "reason": "scope-not-grantable",
+      "evidence": "eval/.out/beyond-mcp.md line 169: /user/watch 401 (read:watcher)"
+    }
+  ]
+}

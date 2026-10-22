@@ -6,10 +6,10 @@ import { firstIssue } from "./validate.ts";
 import {
   formatJson,
   isPretty,
-  parseFieldList,
   project,
   prune,
   sourceMarkdown,
+  splitList,
   writeDiagnostic,
   writeStderr,
   writeStdout,
@@ -319,7 +319,7 @@ export const EXIT_CODE_HELP: Readonly<Record<string, string>> = {
   "0": "ok",
   "1": "input, config, or auth error",
   "2": "API or internal error",
-  "3": "transient (429/5xx/timeout/409); safe to retry",
+  "3": "transient (429/5xx/timeout/409): reads are safe to retry; after a write error `write_outcome_unknown` read back first, the request may have been applied",
   "4": "failed assertion",
 };
 
@@ -478,7 +478,7 @@ function consumeTokens(
     }
     switch (global.name) {
       case "fields": {
-        const parsed = parseFieldList(takeValue("--fields"));
+        const parsed = splitList(takeValue("--fields"));
         if (parsed.length === 0) {
           throw commandError(spec, "--fields needs at least one field path", "invalid_flag_value");
         }
@@ -756,7 +756,8 @@ function unknownCommand(
 
 /**
  * Resolve argv to a help/version/run outcome. Global flags may appear before or after the
- * command words; a command that declares a flag with a global's name owns that flag.
+ * command words; a command that declares a flag with a global's name owns that flag (`--version`
+ * included, e.g. `page get --version 3`; `-V` always prints the CLI version).
  */
 export function parseArgv(
   argv: readonly string[],
@@ -766,8 +767,9 @@ export function parseArgv(
   const dashDash = argv.indexOf("--");
   const flagTokens = dashDash === -1 ? argv : argv.slice(0, dashDash);
   const wantsHelp = flagTokens.includes("--help") || flagTokens.includes("-h");
-  const wantsVersion = flagTokens.includes("--version") || flagTokens.includes("-V");
-  if (wantsVersion && !wantsHelp) {
+  const wantsVersion =
+    !wantsHelp && (flagTokens.includes("--version") || flagTokens.includes("-V"));
+  if (wantsVersion && flagTokens.includes("-V")) {
     return { kind: "version" };
   }
 
@@ -796,10 +798,19 @@ export function parseArgv(
       break;
     }
     if (!reg.isGroupPrefix(words)) {
+      if (wantsVersion) {
+        return { kind: "version" };
+      }
       throw unknownCommand(reg, words, argv.slice(i + 1, dashDash === -1 ? undefined : dashDash));
     }
   }
 
+  if (
+    wantsVersion &&
+    (command === undefined || !describeFlags(command.flags).some((info) => info.flag === "version"))
+  ) {
+    return { kind: "version" };
+  }
   if (command === undefined) {
     return {
       kind: "help",
@@ -912,7 +923,19 @@ export async function runCli(argv: readonly string[], io: Partial<CliIo> = {}): 
     const result = await command.run({ ...globals, env, registry: reg, argv }, input);
     const ownsFields = describeFlags(command.flags).some((info) => info.flag === "fields");
     const selected =
-      globals.fields !== undefined && !ownsFields ? project(result, globals.fields) : result;
+      globals.fields !== undefined && !ownsFields
+        ? project(result, globals.fields, (paths) =>
+            writeDiagnostic(
+              {
+                type: "warning",
+                code: "fields_unmatched",
+                paths,
+                hint: "No result field matched these --fields paths; list items are addressed per item (key, not items.key). Rerun without --fields to see the shape.",
+              },
+              err,
+            ),
+          )
+        : result;
     const projected = globals.full ? selected : prune(selected);
     const printed =
       globals.output === undefined
