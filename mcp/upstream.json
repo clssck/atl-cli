@@ -1,0 +1,124 @@
+{
+  "github": {
+    "plugin": {
+      "name": "atlassian",
+      "version": "1.0.0"
+    },
+    "server": {
+      "name": "com.atlassian/atlassian-mcp-server",
+      "remotes": [
+        {
+          "type": "streamable-http",
+          "url": "https://mcp.atlassian.com/v1/mcp/authv2"
+        },
+        {
+          "type": "streamable-http",
+          "url": "https://mcp.atlassian.com/v2/mcp"
+        }
+      ],
+      "version": "2.0.0"
+    }
+  },
+  "registry": {
+    "latest": {
+      "remotes": [
+        "https://mcp.atlassian.com/v1/mcp/authv2",
+        "https://mcp.atlassian.com/v2/mcp"
+      ],
+      "version": "2.0.0"
+    },
+    "versions": [
+      "1.0.0",
+      "1.1.0",
+      "1.1.1",
+      "1.1.2",
+      "1.1.3",
+      "2.0.0"
+    ]
+  },
+  "resources": {
+    "v1/mcp/authv2": {
+      "authorization_servers": [
+        "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3"
+      ],
+      "resource": "https://mcp.atlassian.com/v1/mcp/authv2",
+      "scopes_supported": [
+        "email",
+        "offline_access",
+        "read:account",
+        "read:all:twg",
+        "read:comment:confluence",
+        "read:component:compass",
+        "read:confluence-user",
+        "read:event:compass",
+        "read:hierarchical-content:confluence",
+        "read:jira-work",
+        "read:me",
+        "read:metric:compass",
+        "read:page:confluence",
+        "read:scorecard:compass",
+        "read:space:confluence",
+        "search:confluence",
+        "write:all:twg",
+        "write:comment:confluence",
+        "write:component:compass",
+        "write:jira-work",
+        "write:page:confluence",
+        "write:scorecard:compass"
+      ],
+      "status": 200
+    },
+    "v2/mcp": {
+      "authorization_servers": [
+        "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3"
+      ],
+      "resource": "https://mcp.atlassian.com/v2/mcp",
+      "scopes_supported": [
+        "delete:jira:agent-interface",
+        "email",
+        "manage:jira:agent-interface",
+        "offline_access",
+        "read:account",
+        "read:all:twg",
+        "read:artifacts:agent-interface",
+        "read:assets:agent-interface",
+        "read:bitbucket:agent-interface",
+        "read:capacity-planning:agent-interface",
+        "read:confluence:agent-interface",
+        "read:focus:agent-interface",
+        "read:goals:agent-interface",
+        "read:jira-align:agent-interface",
+        "read:jira:agent-interface",
+        "read:jsm:agent-interface",
+        "read:loom:agent-interface",
+        "read:me",
+        "read:projects:agent-interface",
+        "read:talent:agent-interface",
+        "read:teams:agent-interface",
+        "search:code:agent-interface",
+        "search:confluence:agent-interface",
+        "search:jira:agent-interface",
+        "search:rovo:agent-interface",
+        "write:all:twg",
+        "write:artifacts:agent-interface",
+        "write:assets:agent-interface",
+        "write:bitbucket:agent-interface",
+        "write:capacity-planning:agent-interface",
+        "write:confluence:agent-interface",
+        "write:focus:agent-interface",
+        "write:goals:agent-interface",
+        "write:jira-align:agent-interface",
+        "write:jira:agent-interface",
+        "write:jsm:agent-interface",
+        "write:loom:agent-interface",
+        "write:projects:agent-interface",
+        "write:talent:agent-interface",
+        "write:teams:agent-interface"
+      ],
+      "status": 200
+    },
+    "v3/mcp": {
+      "status": 404
+    }
+  }
+}

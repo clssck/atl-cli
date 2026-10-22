@@ -1,0 +1,63 @@
+name: MCP watch
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - name: Compare upstream signals with mcp/upstream.json
+        id: watch
+        run: |
+          bun scripts/mcp-watch.ts --issue-body "$RUNNER_TEMP/issue-body.md" > "$RUNNER_TEMP/watch.json"
+          jq '{changed, fingerprint, diff, unavailable}' "$RUNNER_TEMP/watch.json"
+          {
+            echo "changed=$(jq -r '.changed' "$RUNNER_TEMP/watch.json")"
+            echo "fingerprint=$(jq -r '.fingerprint' "$RUNNER_TEMP/watch.json")"
+            echo "paths=$(jq -r '[.diff[].path] | map(split(".")[0] | split("[")[0]) | unique | join(", ")' "$RUNNER_TEMP/watch.json")"
+          } >> "$GITHUB_OUTPUT"
+      - name: Warn about unavailable sources
+        run: |
+          jq -r '.unavailable[] | "\(.source) unavailable: \(.error)" | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | "::warning title=MCP watch::" + .' "$RUNNER_TEMP/watch.json"
+      - name: Open an issue for new upstream changes
+        if: steps.watch.outputs.changed == 'true'
+        env:
+          FINGERPRINT: ${{ steps.watch.outputs.fingerprint }}
+          CHANGED_AREAS: ${{ steps.watch.outputs.paths }}
+        run: |
+          gh label create mcp-upstream --force \
+            --color BFD4F2 \
+            --description "Upstream Atlassian MCP signals changed"
+          existing="$(gh issue list --label mcp-upstream --state open --limit 100 --json body \
+            | jq --arg fp "mcp-watch:$FINGERPRINT" '[.[] | select(.body | contains($fp))] | length')"
+          if [ "$existing" -gt 0 ]; then
+            echo "An open issue already tracks fingerprint $FINGERPRINT"
+            exit 0
+          fi
+          gh issue create \
+            --label mcp-upstream \
+            --title "Atlassian MCP changed: ${CHANGED_AREAS}" \
+            --body-file "$RUNNER_TEMP/issue-body.md"
