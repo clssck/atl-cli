@@ -1018,6 +1018,18 @@ describe("jql", () => {
       expect(error.code).toBe("conflicting_flags");
       expect(calls).toHaveLength(0);
     });
+
+    test("the conflict message spells flags in kebab-case", async () => {
+      const error = await failure(
+        run(
+          "jql",
+          { query: "x = 1" },
+          { groupBy: "status", issueFields: "summary", resultMode: "count" },
+        ),
+      );
+      expect(error.message).toContain("--issue-fields, --result-mode");
+      expect(error.message).not.toContain("issueFields");
+    });
   });
 });
 
@@ -1275,6 +1287,14 @@ describe("project.types / project.fields", () => {
     });
     const result = itemsOf(await run("project.types", { project: "ABC" }));
     expect(result.map((t) => t.id)).toEqual(["10001", "10004"]);
+  });
+
+  test("project.types sends a lowercase project key as the uppercase key Jira expects", async () => {
+    respond({
+      "/rest/api/3/issue/createmeta/ABC/issuetypes": { startAt: 0, total: 2, issueTypes: types },
+    });
+    await run("project.types", { project: " abc " });
+    expect(calls.map((c) => c.path)).toEqual(["/rest/api/3/issue/createmeta/ABC/issuetypes"]);
   });
 
   const fieldsPage = {

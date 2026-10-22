@@ -386,6 +386,23 @@ describe("global flags", () => {
     });
     expect(parseArgv(["nope", "--version"], makeRegistry(), {})).toEqual({ kind: "version" });
   });
+
+  test("repeated --fields accumulate paths instead of the last one winning", async () => {
+    const run = parseRun(["echo", "--fields", "id", "--fields=fields.a,x"]);
+    expect(run.globals.fields).toEqual(["id", "fields.a", "x"]);
+    const { stdout } = await runAtl(["echo", "--fields", "id", "--fields", "fields.a"]);
+    expect(JSON.parse(stdout)).toMatchObject({
+      items: [
+        { id: 1, fields: { a: "x" } },
+        { id: 2, fields: { a: "z" } },
+      ],
+    });
+  });
+
+  test("repeated --site or --output is a duplicate_flag error, not a silent last-wins", () => {
+    expect(parseError(["echo", "--site", "a", "--site", "b"]).code).toBe("duplicate_flag");
+    expect(parseError(["echo", "--output", "a.md", "--output=b.md"]).code).toBe("duplicate_flag");
+  });
 });
 
 async function runAtl(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {

@@ -281,7 +281,9 @@ export const ApiFlags = Type.Object({
   query: Type.Optional(
     Type.Array(Type.String(), { description: "Query parameter as key=value; repeatable" }),
   ),
-  bodyFile: Type.Optional(Type.String({ description: "Path to a JSON request body" })),
+  bodyFile: Type.Optional(
+    Type.String({ description: "Path to a JSON request body (- for stdin)" }),
+  ),
   yes: Type.Optional(Type.Boolean({ description: "Confirm a non-GET request" })),
 });
 
@@ -348,15 +350,15 @@ export async function runApi(
   let body: unknown;
   if (flags.bodyFile !== undefined) {
     const file = flags.bodyFile;
-    const bodyText = await (deps.readFile ?? ((p) => Bun.file(p).text()))(file).catch(
-      (cause: unknown) => {
-        throw new AtlError(`Cannot read --body-file ${file}`, {
-          code: "body_file_unreadable",
-          category: "input",
-          cause,
-        });
-      },
-    );
+    const read =
+      deps.readFile ?? ((p: string) => (p === "-" ? Bun.stdin.text() : Bun.file(p).text()));
+    const bodyText = await read(file).catch((cause: unknown) => {
+      throw new AtlError(`Cannot read --body-file ${file}`, {
+        code: "body_file_unreadable",
+        category: "input",
+        cause,
+      });
+    });
     try {
       body = JSON.parse(bodyText);
     } catch (cause) {

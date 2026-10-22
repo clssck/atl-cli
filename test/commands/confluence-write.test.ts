@@ -494,6 +494,33 @@ describe("page.update", () => {
     expect(asRecord(body.version)).toEqual({ number: 5 });
   });
 
+  test("a bare blog post id is found on the blog post collection and updated there", async () => {
+    const BLOG = { ...CURRENT, id: "777", _links: { webui: "/spaces/ENG/blog/2026/10/22/777" } };
+    route("GET", "/api/v2/blogposts/777", BLOG);
+    route("PUT", "/api/v2/blogposts/777", { ...BLOG, version: { number: 5 }, body: {} });
+    const result = asRecord(await run(pageUpdate, { page: "777" }, { title: "Post v2" }));
+    expect(sent("GET").map((call) => call.path)).toEqual([
+      "/api/v2/pages/777",
+      "/api/v2/blogposts/777",
+    ]);
+    expect(onlyWrite("PUT").path).toBe("/api/v2/blogposts/777");
+    expect(result).toMatchObject({ id: "777", type: "blogpost", version: 5 });
+  });
+
+  test("a bare blog post id with --parent is refused before anything is written", async () => {
+    route("GET", "/api/v2/blogposts/777", { ...CURRENT, id: "777" });
+    const error = await errorOf(run(pageUpdate, { page: "777" }, { parent: "100" }));
+    expect(error.code).toBe("unsupported_for_blogpost");
+    expect(sent("PUT")).toHaveLength(0);
+  });
+
+  test("a bare id missing from both collections reports the page error", async () => {
+    const error = await errorOf(run(pageUpdate, { page: "777" }, { title: "T" }));
+    expect(error.status).toBe(404);
+    expect(error.message).toContain("/pages/777");
+    expect(sent("PUT")).toHaveLength(0);
+  });
+
   describe("on a page with inline-comment anchors", () => {
     const ANCHORED_PAGE = { ...CURRENT, body: { atlas_doc_format: { value: anchored("ann-1") } } };
 
@@ -1175,6 +1202,10 @@ describe("selection helpers", () => {
     expect(() => locateSelection("x", "y", 1)).toThrow(AtlError);
     expect(() => locateSelection("x", "x", 2)).toThrow(AtlError);
   });
+
+  test("an empty selection is an input error (it would match everywhere)", () => {
+    expect(() => locateSelection("text", "", 1)).toThrow("--select is empty");
+  });
 });
 
 const PAGE_WITH_BODY = {
@@ -1790,6 +1821,19 @@ describe("page.property.set", () => {
       action: "created",
       next: [["atl", "page", "properties", "123456", "--key", "nm-owner"]],
     });
+  });
+
+  test("a bare blog post id writes the property under blogposts", async () => {
+    const BLOG_PROPS = "/api/v2/blogposts/777/properties";
+    route("GET", BLOG_PROPS, { results: [] });
+    route("POST", BLOG_PROPS, { id: "p1", key: "nm-owner", value: 1, version: { number: 1 } });
+    const result = asRecord(
+      await run(pagePropertySet, { page: "777", key: "nm-owner" }, { value: "1" }),
+    );
+    expect(onlyWrite("POST").path).toBe(BLOG_PROPS);
+    expect(result.next).toEqual([
+      ["atl", "page", "properties", "777", "--key", "nm-owner", "--type", "blogpost"],
+    ]);
   });
 
   test("replaces an existing property with PUT and the next version", async () => {

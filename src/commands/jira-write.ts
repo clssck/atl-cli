@@ -13,6 +13,7 @@ import {
   ISSUE_ARG,
   issueSession,
   jiraDeps,
+  projectKey,
   resolveIssueTypeId,
   userName,
   type JiraComment,
@@ -191,7 +192,8 @@ function issueRef(input: string): { key: string } | { id: string } {
 }
 
 function projectRef(input: string): { key: string } | { id: string } {
-  return ISSUE_ID.test(input) ? { id: input } : { key: input };
+  const project = projectKey(input);
+  return ISSUE_ID.test(project) ? { id: project } : { key: project };
 }
 
 /** A later request of the same invocation, shown under a plan's `followUp`. */
@@ -338,13 +340,17 @@ async function resolveTransition(
 /** Jira duration: space-separated `<number><w|d|h|m>` tokens, e.g. `2h 30m`, `1.5h`. */
 const JIRA_DURATION = /^\d+(\.\d+)?[wdhm](\s+\d+(\.\d+)?[wdhm])*$/;
 
+/** ISO 8601 date or date-time with optional seconds, fraction and offset. */
+const ISO_INSTANT =
+  /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$/i;
+
 /** Normalize an ISO 8601 instant to Jira's `yyyy-MM-dd'T'HH:mm:ss.SSSZ` worklog format. */
 function jiraTimestamp(input: string): string {
   const text = input.trim();
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/.test(text)) {
     return text;
   }
-  const date = new Date(text);
+  const date = ISO_INSTANT.test(text) ? new Date(text) : new Date(Number.NaN);
   if (Number.isNaN(date.getTime())) {
     throw inputError(
       "invalid_started",
@@ -379,7 +385,7 @@ const issueCreate = defineCommand({
       Type.String({ description: "Parent issue (for subtasks and child issues)" }),
     ),
     assignee: Type.Optional(
-      Type.String({ description: "Assignee account id (see `atl user find`)" }),
+      Type.String({ description: "Assignee account id (see `atl user find`), none, or auto" }),
     ),
     ...FIELD_FLAGS,
     transition: Type.Optional(
@@ -406,7 +412,7 @@ const issueCreate = defineCommand({
       summary: flags.summary,
       ...(description === undefined ? {} : { description: jiraBody(description) }),
       ...(flags.parent === undefined ? {} : { parent: issueRef(flags.parent) }),
-      ...(flags.assignee === undefined ? {} : { assignee: { accountId: flags.assignee } }),
+      ...(flags.assignee === undefined ? {} : { assignee: assigneeValue(flags.assignee) }),
     });
     const created = await sendWrite<CreatedIssue>(
       ctx,
@@ -483,7 +489,7 @@ const issueEdit = defineCommand({
   flags: Type.Object({
     summary: Type.Optional(Type.String({ description: "New summary" })),
     ...BODY_FLAGS,
-    assignee: Type.Optional(Type.String({ description: "Assignee account id" })),
+    assignee: Type.Optional(Type.String({ description: "Assignee account id, none, or auto" })),
     ...FIELD_FLAGS,
     format: ADF_FORMAT_FLAG,
   }),
@@ -501,7 +507,7 @@ const issueEdit = defineCommand({
     const fields = await buildFields(flags, {
       ...(flags.summary === undefined ? {} : { summary: flags.summary }),
       ...(description === undefined ? {} : { description: jiraBody(description) }),
-      ...(flags.assignee === undefined ? {} : { assignee: { accountId: flags.assignee } }),
+      ...(flags.assignee === undefined ? {} : { assignee: assigneeValue(flags.assignee) }),
     });
     const names = Object.keys(fields);
     if (names.length === 0) {

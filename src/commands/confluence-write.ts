@@ -12,6 +12,7 @@ import {
   commentGetArgv,
   COMMENT_KIND_FLAG,
   openConfluence,
+  probeBase,
   resolveSpaceId,
   spaceSiteHint,
   TYPE_FLAG,
@@ -95,6 +96,16 @@ function currentVersion(current: { version?: { number?: number } }, what: string
     });
   }
   return number;
+}
+
+/** A blog post has no hierarchy: `flag` (a parent or destination page) is only valid for pages. */
+function requirePagesForParent(base: ContentBase, flag: string, value: string | undefined): void {
+  if (base === "blogposts" && value !== undefined) {
+    throw inputError(
+      "unsupported_for_blogpost",
+      `${flag} only applies to pages; blog posts have no hierarchy`,
+    );
+  }
 }
 
 /** The current ADF body, re-sent verbatim when an update does not replace it. */
@@ -304,13 +315,8 @@ export const pageUpdate = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const target = contentTarget(input.args.page ?? "", flags.type);
-    if (target.base === "blogposts" && flags.parent !== undefined) {
-      throw inputError(
-        "unsupported_for_blogpost",
-        "--parent only applies to pages; blog posts have no hierarchy",
-      );
-    }
+    const requested = contentTarget(input.args.page ?? "", flags.type);
+    requirePagesForParent(requested.base, "--parent", flags.parent);
     if (
       flags.file === undefined &&
       flags.body === undefined &&
@@ -329,14 +335,21 @@ export const pageUpdate = defineCommand({
     const loaded = await loadBody(flags, { allowStorage: true });
     const session = await openConfluence(
       ctx,
-      target.site ??
+      requested.site ??
         parent?.site ??
         (flags.space === undefined ? undefined : spaceSiteHint(flags.space)),
     );
     const spaceId =
       flags.space === undefined ? undefined : await resolveSpaceId(session, flags.space);
+    const { target, value: current } = await probeBase(requested, (probed) =>
+      session.http.request<ApiPage>({
+        method: "GET",
+        url: session.confluenceUrl(`/api/v2/${probed.base}/${encodeURIComponent(probed.id)}`),
+        query: ADF_BODY,
+      }),
+    );
+    requirePagesForParent(target.base, "--parent", flags.parent);
     const url = session.confluenceUrl(`/api/v2/${target.base}/${encodeURIComponent(target.id)}`);
-    const current = await session.http.request<ApiPage>({ method: "GET", url, query: ADF_BODY });
     const title = flags.title ?? current.title;
     if (title === undefined) {
       throw new AtlError(`Page ${target.id} came back without a title`, {
@@ -457,6 +470,13 @@ export function locateSelection(
   selection: string,
   match: number,
 ): { count: number; index: number } {
+  if (selection === "") {
+    throw inputError(
+      "empty_selection",
+      "--select is empty",
+      "Pass the exact page text to anchor the comment to",
+    );
+  }
   let count = 0;
   for (
     let from = text.indexOf(selection);
@@ -678,11 +698,18 @@ export const commentAdd = defineCommand({
       };
     }
 
-    const created = await sendWrite<ApiComment>(ctx, session, {
-      method: "POST",
-      url: session.confluenceUrl(commentPath(postKind)),
-      body: { ...anchor, body: confluenceBody(body) },
-    });
+    const created = await sendWrite<ApiComment>(
+      ctx,
+      session,
+      {
+        method: "POST",
+        url: session.confluenceUrl(commentPath(postKind)),
+        body: { ...anchor, body: confluenceBody(body) },
+      },
+      page?.base === "pages" && flags.targetType === undefined
+        ? { notFoundHint: `If ${page.id} is a blog post, pass --target-type blogpost.` }
+        : {},
+    );
     return isPlan(created) ? created : compactWrittenComment(session, created, postKind, reply?.id);
   },
 });
@@ -901,26 +928,24 @@ export const pageCopy = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const source = contentTarget(input.args.page ?? "", flags.type);
-    if (source.base === "blogposts" && flags.toParent !== undefined) {
-      throw inputError(
-        "unsupported_for_blogpost",
-        "--to-parent only applies to pages; blog posts have no hierarchy",
-      );
-    }
+    const requested = contentTarget(input.args.page ?? "", flags.type);
+    requirePagesForParent(requested.base, "--to-parent", flags.toParent);
     const parent =
       flags.toParent === undefined ? undefined : pageRef(flags.toParent, "--to-parent");
     const session = await openConfluence(
       ctx,
-      source.site ??
+      requested.site ??
         parent?.site ??
         (flags.toSpace === undefined ? undefined : spaceSiteHint(flags.toSpace)),
     );
-    const original = await session.http.request<ApiPage>({
-      method: "GET",
-      url: session.confluenceUrl(`/api/v2/${source.base}/${encodeURIComponent(source.id)}`),
-      query: ADF_BODY,
-    });
+    const { target: source, value: original } = await probeBase(requested, (probed) =>
+      session.http.request<ApiPage>({
+        method: "GET",
+        url: session.confluenceUrl(`/api/v2/${probed.base}/${encodeURIComponent(probed.id)}`),
+        query: ADF_BODY,
+      }),
+    );
+    requirePagesForParent(source.base, "--to-parent", flags.toParent);
     const title =
       flags.title ?? (original.title === undefined ? undefined : `Copy of ${original.title}`);
     const value = original.body?.atlas_doc_format?.value;
@@ -1006,10 +1031,15 @@ export const pageRestore = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const target = contentTarget(input.args.page ?? "", flags.type);
-    const session = await openConfluence(ctx, target.site);
+    const requested = contentTarget(input.args.page ?? "", flags.type);
+    const session = await openConfluence(ctx, requested.site);
+    const { target, value: current } = await probeBase(requested, (probed) =>
+      session.http.request<ApiPage>({
+        method: "GET",
+        url: session.confluenceUrl(`/api/v2/${probed.base}/${encodeURIComponent(probed.id)}`),
+      }),
+    );
     const url = session.confluenceUrl(`/api/v2/${target.base}/${encodeURIComponent(target.id)}`);
-    const current = await session.http.request<ApiPage>({ method: "GET", url });
     const old = await session.http.request<ApiPage>({
       method: "GET",
       url,
@@ -1489,10 +1519,12 @@ export const pagePropertySet = defineCommand({
   async run(ctx, input) {
     const { flags } = input;
     const key = input.args.key ?? "";
-    const target = contentTarget(input.args.page ?? "", flags.type);
+    const requested = contentTarget(input.args.page ?? "", flags.type);
     const value = await propertyValue(flags);
-    const session = await openConfluence(ctx, target.site);
-    const existing = await findProperty(session, target, key);
+    const session = await openConfluence(ctx, requested.site);
+    const { target, value: existing } = await probeBase(requested, (probed) =>
+      findProperty(session, probed, key),
+    );
     const collection = session.confluenceUrl(
       `/api/v2/${target.base}/${encodeURIComponent(target.id)}/properties`,
     );
@@ -1551,10 +1583,12 @@ export const pagePropertyDelete = defineCommand({
   async run(ctx, input) {
     const { flags } = input;
     const key = input.args.key ?? "";
-    const target = contentTarget(input.args.page ?? "", flags.type);
-    requireYes(ctx, flags.yes, `Deleting property ${key} of ${target.id}`);
-    const session = await openConfluence(ctx, target.site);
-    const existing = await findProperty(session, target, key);
+    const requested = contentTarget(input.args.page ?? "", flags.type);
+    requireYes(ctx, flags.yes, `Deleting property ${key} of ${requested.id}`);
+    const session = await openConfluence(ctx, requested.site);
+    const { target, value: existing } = await probeBase(requested, (probed) =>
+      findProperty(session, probed, key),
+    );
     if (existing === undefined) {
       throw new AtlError(`Page ${target.id} has no property ${JSON.stringify(key)}`, {
         code: "property_not_found",

@@ -8,6 +8,7 @@ import { parseJiraRef } from "../resolve/index.ts";
 import {
   issueSession,
   jiraDeps,
+  projectKey,
   resolveIssueType,
   resolvePriorityId,
   searchJql,
@@ -313,7 +314,8 @@ async function moveRequest(
   },
   notify: boolean | undefined,
 ): Promise<{ path: string; body: unknown }> {
-  const type = await resolveIssueType(session, target.project, target.type);
+  const project = projectKey(target.project);
+  const type = await resolveIssueType(session, project, target.type);
   const typeId = type.id;
   const mandatory = await readMandatoryFields(target.fieldsFile);
   const parent = target.parent === undefined ? undefined : parseJiraRef(target.parent);
@@ -337,9 +339,7 @@ async function moveRequest(
       "Pass a different issue as the parent.",
     );
   }
-  const mappingKey = [target.project, typeId, ...(parentKey === undefined ? [] : [parentKey])].join(
-    ",",
-  );
+  const mappingKey = [project, typeId, ...(parentKey === undefined ? [] : [parentKey])].join(",");
   return {
     path: "/rest/api/3/bulk/issues/move",
     body: {

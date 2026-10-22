@@ -314,6 +314,12 @@ export const ISSUE_ARG = {
 };
 const PROJECT_ARG = { name: "project", description: "Project key or id", required: true };
 
+/** A project key or id as Jira's paths need it: keys are uppercase there, so `kan` reads as `KAN`. */
+export function projectKey(input: string): string {
+  const text = input.trim();
+  return /^\d+$/.test(text) ? text : text.toUpperCase();
+}
+
 // ---------------------------------------------------------------------------
 // issue.*
 // ---------------------------------------------------------------------------
@@ -1244,7 +1250,7 @@ function fetchIssueTypes(
       session.http.request<CreateMetaPage<IssueTypeMeta>>({
         method: "GET",
         url: session.jiraUrl(
-          `/rest/api/3/issue/createmeta/${encodeURIComponent(project)}/issuetypes`,
+          `/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey(project))}/issuetypes`,
         ),
         query: { startAt, maxResults: pageSize },
       }),
@@ -1300,7 +1306,7 @@ const projectTypes = defineCommand({
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
     const paged = await fetchIssueTypes(
       session,
-      input.args.project ?? "",
+      projectKey(input.args.project ?? ""),
       input.flags.all === true,
       input.flags,
     );
@@ -1337,7 +1343,7 @@ const projectFields = defineCommand({
   examples: ["atl project fields ABC Bug", "atl project fields ABC 10004 --all"],
   async run(ctx, input) {
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
-    const project = input.args.project ?? "";
+    const project = projectKey(input.args.project ?? "");
     const typeArg = (input.args.type ?? "").trim();
     const typeId = /^\d+$/.test(typeArg)
       ? typeArg
@@ -1426,12 +1432,14 @@ function slicePage<T>(items: readonly T[], flags: PagingFlags, defaultLimit: num
 }
 
 function conflictingFlags(mode: string, flags: Record<string, unknown>, names: readonly string[]) {
-  const used = names.filter((name) => flags[name] !== undefined);
+  const used = names
+    .filter((name) => flags[name] !== undefined)
+    .map((name) => `--${name.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`);
   if (used.length > 0) {
-    throw new AtlError(`${mode} cannot be combined with ${used.map((n) => `--${n}`).join(", ")}`, {
+    throw new AtlError(`${mode} cannot be combined with ${used.join(", ")}`, {
       code: "conflicting_flags",
       category: "input",
-      hint: `Drop ${used.map((n) => `--${n}`).join(", ")} or ${mode}.`,
+      hint: `Drop ${used.join(", ")} or ${mode}.`,
     });
   }
 }
@@ -1683,7 +1691,7 @@ const issuePermissions = defineCommand({
     let session: Session;
     let query: Query;
     if (issue === undefined) {
-      const project = input.flags.project ?? "";
+      const project = projectKey(input.flags.project ?? "");
       session = await openSession(ctx, { fetch: jiraDeps.fetch });
       query = {
         permissions,
@@ -1797,7 +1805,9 @@ const statusList = defineCommand({
     }
     const types = await session.http.request<ProjectStatuses[]>({
       method: "GET",
-      url: session.jiraUrl(`/rest/api/3/project/${encodeURIComponent(flags.project)}/statuses`),
+      url: session.jiraUrl(
+        `/rest/api/3/project/${encodeURIComponent(projectKey(flags.project))}/statuses`,
+      ),
     });
     const wantedType = flags.issueType?.toLowerCase();
     const selected = types
@@ -1877,7 +1887,7 @@ const componentList = defineCommand({
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
     const paged = await offsetList<Component>(
       session,
-      `/rest/api/3/project/${encodeURIComponent(input.args.project ?? "")}/component`,
+      `/rest/api/3/project/${encodeURIComponent(projectKey(input.args.project ?? ""))}/component`,
       input.flags,
       {
         query: input.flags.query,
@@ -1962,7 +1972,7 @@ const versionList = defineCommand({
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
     const paged = await offsetList<Version>(
       session,
-      `/rest/api/3/project/${encodeURIComponent(input.args.project ?? "")}/version`,
+      `/rest/api/3/project/${encodeURIComponent(projectKey(input.args.project ?? ""))}/version`,
       input.flags,
       {
         query: input.flags.query,

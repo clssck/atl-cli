@@ -14,7 +14,7 @@ import {
 import { openSession, type Session } from "../core/session.ts";
 import { writeDiagnostic } from "../core/output.ts";
 import { queryLiteral, shortTs } from "./common.ts";
-import { searchHitSpaceKey, snippet, webUrl } from "./confluence.ts";
+import { searchHitSpaceKey, searchHitTitle, snippet, webUrl } from "./confluence.ts";
 
 export const searchGroups: Readonly<Record<string, string>> = {
   user: "Find Atlassian users",
@@ -177,6 +177,7 @@ interface ConfluenceHit {
   content?: {
     id?: string;
     type?: string;
+    title?: string;
     space?: { key?: string };
     ancestors?: { title?: string }[];
   };
@@ -247,18 +248,19 @@ function decodeCursor(cursor: string): SearchState {
   return { confluence: value.confluence, jira: value.jira, turn: value.turn };
 }
 
-const HIGHLIGHT = /@@@(?:end)?hl@@@/g;
 const JIRA_FIELDS = "summary,updated,status,issuetype,project,description";
 
 /**
  * User text must match literally, but Lucene (behind both CQL and JQL `~`) reads upper-case
  * AND / OR / NOT as operators and a leading `-` as exclusion: lower-case the words (a lower-case
- * "and" is an ordinary stop word) and escape the dash.
+ * "and" is an ordinary stop word) and escape the dash. A trailing backslash would escape the
+ * phrase's closing quote (HTTP 400 "Escaped end quote"): a space after it is insignificant.
  */
 function literalText(query: string): string {
   return query
     .replaceAll(/(?<![\w])(?:AND|OR|NOT)(?![\w])/g, (word) => word.toLowerCase())
-    .replaceAll(/(^|\s)-(?=\S)/g, "$1\\-");
+    .replaceAll(/(^|\s)-(?=\S)/g, "$1\\-")
+    .replace(/\\$/, "\\ ");
 }
 
 /** The CQL `search` runs for Confluence (`text`), and the `atl cql` equivalent of it. */
@@ -325,7 +327,7 @@ function compactConfluence(session: Session, hit: ConfluenceHit) {
   return {
     id: id === undefined ? undefined : String(id),
     type,
-    title: hit.title?.replaceAll(HIGHLIGHT, ""),
+    title: searchHitTitle(hit),
     spaceKey: searchHitSpaceKey(hit),
     parent: hit.content?.ancestors?.at(-1)?.title,
     text: snippet(hit.excerpt),

@@ -1048,6 +1048,24 @@ describe("cql", () => {
     expect(lastQuery().get("cursor")).toBe("NEXTCUR");
   });
 
+  test("hit titles are the stored text, not the HTML-escaped top-level title", async () => {
+    route("/rest/api/search", {
+      results: [
+        {
+          ...RESULTS[0],
+          content: { id: "1", type: "page", title: 'Say "hi" & it\'s <b>' },
+          title: "Say &quot;hi&quot; &amp; it&#39;s &lt;b&gt;",
+        },
+        { ...RESULTS[0], content: { id: "2", type: "page" }, title: "a &amp; b &#x27;" },
+      ],
+    });
+    const result = await run(cql, { query: "type=page" });
+    expect(itemsOf(result).map((item) => asRecord(item).title)).toEqual([
+      'Say "hi" & it\'s <b>',
+      "a & b '",
+    ]);
+  });
+
   test("--all follows the cursor across pages", async () => {
     let page = 0;
     const original = confluenceDeps.fetch;

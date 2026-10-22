@@ -490,6 +490,29 @@ describe("search", () => {
     expect(calls.find((call) => call.path === CONFLUENCE_SEARCH)?.query.get("cql")).toBe(literal);
     expect(calls.find((call) => call.path === JIRA_SEARCH)?.query.get("jql")).toBe(literal);
   });
+
+  test("a trailing backslash cannot escape the closing quote of the phrase", async () => {
+    respond({ [CONFLUENCE_SEARCH]: { results: [pageHit("1", "A")] } });
+    await run("search", { query: "C:\\dir\\" }, { product: "confluence" });
+    expect(calls[0]?.query.get("cql")).toBe('text ~ "C:\\\\dir\\\\ "');
+  });
+
+  test("hit titles are the stored text, not the escaped HTML of the top-level title", async () => {
+    respond({
+      [CONFLUENCE_SEARCH]: {
+        results: [
+          {
+            content: { id: "1", type: "page", title: 'Say "hi" & it\'s <b>' },
+            title: "Say &quot;hi&quot; &amp; it&#39;s &lt;b&gt;",
+            url: "/spaces/ENG/pages/1/x",
+          },
+          { content: { id: "2", type: "page" }, title: "@@@hl@@@a &amp; b &#x27;@@@endhl@@@" },
+        ],
+      },
+    });
+    const items = itemsOf(await run("search", { query: "q" }, { product: "confluence" }));
+    expect(items.map((item) => item.title)).toEqual(['Say "hi" & it\'s <b>', "a & b '"]);
+  });
 });
 
 describe("user.get", () => {

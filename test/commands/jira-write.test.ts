@@ -208,7 +208,7 @@ describe("issue.create", () => {
         summary: "Crash on save",
         file: desc,
         parent: "ABC-1",
-        assignee: "acc-1",
+        assignee: "62a219658783e7006f627f3b",
         set: ['labels=["a","b"]', 'priority={"name":"High"}', "customfield_10010=plain text"],
         fieldsFile: extra,
       },
@@ -223,7 +223,7 @@ describe("issue.create", () => {
         summary: "Crash on save",
         description: markdownToAdf("Hello **world**"),
         parent: { key: "ABC-1" },
-        assignee: { accountId: "acc-1" },
+        assignee: { accountId: "62a219658783e7006f627f3b" },
         labels: ["a", "b"],
         priority: { name: "High" },
         customfield_10010: "plain text",
@@ -332,6 +332,12 @@ describe("issue.create", () => {
     serve({ [TYPES_ROUTE]: TYPES, "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }) });
     await run("issue.create", {}, { project: "ABC", type: "bUg", summary: "S" });
     expect(bodyField(0, "fields")).toMatchObject({ issuetype: { id: "10002" } });
+  });
+
+  test("a lowercase --project is sent as the uppercase key, for the type lookup and the create", async () => {
+    serve({ [TYPES_ROUTE]: TYPES, "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }) });
+    await run("issue.create", {}, { project: "abc", type: "Task", summary: "S" });
+    expect(bodyField(0, "fields")).toMatchObject({ project: { key: "ABC" } });
   });
 
   test("a dedicated flag colliding with --set is an input error", async () => {
@@ -444,7 +450,7 @@ describe("issue.edit", () => {
       {
         summary: "New title",
         file: desc,
-        assignee: "acc-9",
+        assignee: "none",
         set: ["customfield_10010=custom", "resolution=null"],
       },
     );
@@ -457,7 +463,7 @@ describe("issue.edit", () => {
       fields: {
         summary: "New title",
         description: markdownToAdf("Body"),
-        assignee: { accountId: "acc-9" },
+        assignee: { accountId: null },
         customfield_10010: "custom",
         resolution: null,
       },
@@ -891,6 +897,28 @@ describe("issue.log", () => {
       run("issue.log", { issue: "ABC-123" }, { started: "yesterday-ish" }, { rest: ["1h"] }),
     );
     expect(error.code).toBe("invalid_started");
+  });
+
+  test.each(["1", "2026", "10/22/2026", "March 9", "2026-13-45"])(
+    "--started %p is rejected instead of guessed by the date parser",
+    async (started) => {
+      serve({});
+      const error = await failure(
+        run("issue.log", { issue: "ABC-123" }, { started }, { rest: ["1h"] }),
+      );
+      expect(error.code).toBe("invalid_started");
+      expect(sent).toEqual([]);
+    },
+  );
+
+  test.each([
+    ["2026-03-09T09:00:00Z", "2026-03-09T09:00:00.000+0000"],
+    ["2026-03-09T10:00+01:00", "2026-03-09T09:00:00.000+0000"],
+    ["2026-03-09T10:00:00.5+0100", "2026-03-09T09:00:00.500+0000"],
+  ])("--started %p is normalized to the worklog format", async (started, wire) => {
+    serve({ "POST /rest/api/3/issue/ABC-123/worklog": created(WORKLOG) });
+    await run("issue.log", { issue: "ABC-123" }, { started }, { rest: ["1h"] });
+    expect(bodyField(0, "started")).toBe(wire);
   });
 
   test("--plan sends nothing", async () => {

@@ -124,6 +124,7 @@ interface ApiSearchResult {
   content?: {
     id?: string;
     type?: string;
+    title?: string;
     space?: { key?: string };
     ancestors?: { title?: string }[];
   };
@@ -140,6 +141,19 @@ export function searchHitSpaceKey(
 ): string | undefined {
   const containerKey = hit.resultGlobalContainer?.displayUrl?.match(/^\/spaces\/([^/]+)/)?.[1];
   return containerKey === undefined ? hit.content?.space?.key : decodeURIComponent(containerKey);
+}
+
+/**
+ * Title of a v1 search hit. The top-level `title` is HTML-escaped (`&quot;`, `&#39;`, `&amp;`) and
+ * may carry highlight markers; the content's own title is the stored text, so it wins when present.
+ */
+export function searchHitTitle(
+  hit: Pick<ApiSearchResult, "content" | "title">,
+): string | undefined {
+  return (
+    hit.content?.title ??
+    (hit.title === undefined ? undefined : decodeEntities(hit.title.replaceAll(HIGHLIGHT, "")))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -277,10 +291,31 @@ function isMissing(error: unknown): error is AtlError {
 }
 
 /**
- * Run a read against a page or blog post. When the reference does not say which (`target.probe`),
- * a 404/400 from the page collection is retried on blog posts; the page error is reported when
- * both miss.
+ * Run a request against a page or blog post. When the reference does not say which
+ * (`target.probe`), a 404/400 from the page collection is retried on blog posts; the page error is
+ * reported when both miss. The returned target names the collection that answered, for the
+ * requests that follow. `run` must be a read: it can be repeated.
  */
+export async function probeBase<T>(
+  target: ContentTarget,
+  run: (target: ContentTarget) => Promise<T>,
+): Promise<{ target: ContentTarget; value: T }> {
+  try {
+    return { target, value: await run(target) };
+  } catch (error) {
+    if (!target.probe || !isMissing(error)) {
+      throw error;
+    }
+    const blog: ContentTarget = { ...target, base: "blogposts", probe: false };
+    try {
+      return { target: blog, value: await run(blog) };
+    } catch (second) {
+      throw isMissing(second) ? error : second;
+    }
+  }
+}
+
+/** Run a read against a page or blog post (see `probeBase`). */
 async function readContent<T>(
   ctx: CommandContext,
   input: string,
@@ -288,18 +323,7 @@ async function readContent<T>(
   run: (session: Session, target: ContentTarget) => Promise<T>,
 ): Promise<T> {
   const { session, target } = await openContent(ctx, input, type);
-  try {
-    return await run(session, target);
-  } catch (error) {
-    if (!target.probe || !isMissing(error)) {
-      throw error;
-    }
-    try {
-      return await run(session, { ...target, base: "blogposts", probe: false });
-    } catch (second) {
-      throw isMissing(second) ? error : second;
-    }
-  }
+  return (await probeBase(target, (probed) => run(session, probed))).value;
 }
 
 /** The `atl page versions` argv that lists the versions of this content. */
@@ -362,22 +386,36 @@ const ENTITIES: Readonly<Record<string, string>> = {
   gt: ">",
   quot: '"',
   apos: "'",
-  "#39": "'",
   nbsp: " ",
 };
 const SNIPPET_MAX = 160;
+
+/** Decode the HTML entities search results carry: the named ones above and numeric `&#39;` / `&#x27;`. */
+function decodeEntities(text: string): string {
+  return text.replaceAll(
+    /&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6}));/g,
+    (match, name?: string, dec?: string, hex?: string) => {
+      if (name !== undefined) {
+        return ENTITIES[name] ?? match;
+      }
+      const code = dec === undefined ? Number.parseInt(hex ?? "", 16) : Number.parseInt(dec, 10);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    },
+  );
+}
 
 /**
  * Search excerpt as one line: highlight markers stripped, HTML entities and literal
  * `\uXXXX` escapes decoded, whitespace collapsed, capped at 160 chars with an ellipsis.
  */
 export function snippet(text: string | undefined): string | undefined {
-  const flat = (text ?? "")
-    .replaceAll(HIGHLIGHT, "")
-    .replaceAll(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
-      String.fromCodePoint(Number.parseInt(hex, 16)),
-    )
-    .replaceAll(/&(amp|lt|gt|quot|apos|#39|nbsp);/g, (_, name: string) => ENTITIES[name] ?? "")
+  const flat = decodeEntities(
+    (text ?? "")
+      .replaceAll(HIGHLIGHT, "")
+      .replaceAll(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+        String.fromCodePoint(Number.parseInt(hex, 16)),
+      ),
+  )
     .replaceAll(/\s+/g, " ")
     .trim();
   if (flat === "") {
@@ -2494,7 +2532,7 @@ export const cql = defineCommand({
       return {
         id: result.content?.id,
         type: type === "page" ? undefined : type,
-        title: result.title?.replaceAll(HIGHLIGHT, ""),
+        title: searchHitTitle(result),
         spaceKey: searchHitSpaceKey(result),
         ancestors: result.content?.ancestors?.map((ancestor) => ancestor.title),
         excerpt: snippet(result.excerpt),

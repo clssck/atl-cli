@@ -440,6 +440,12 @@ function consumeTokens(
       i++;
       return next;
     };
+    const takeOnce = (current: string | undefined): string => {
+      if (current !== undefined) {
+        throw commandError(spec, `--${name} was given more than once`, "duplicate_flag");
+      }
+      return takeValue(`--${name}`);
+    };
 
     const info = own.get(name);
     if (info !== undefined) {
@@ -482,14 +488,15 @@ function consumeTokens(
         if (parsed.length === 0) {
           throw commandError(spec, "--fields needs at least one field path", "invalid_flag_value");
         }
-        globals.fields = parsed;
+        // Repeated --fields add paths, like repeated list flags.
+        globals.fields = [...(globals.fields ?? []), ...parsed];
         break;
       }
       case "output":
-        globals.output = takeValue("--output");
+        globals.output = takeOnce(globals.output);
         break;
       case "site":
-        globals.site = takeValue("--site");
+        globals.site = takeOnce(globals.site);
         break;
       case "full":
         globals.full = coerce(spec, { ...BOOLEAN_INFO, flag: name }, inline ?? "true") === true;
