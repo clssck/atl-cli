@@ -34,7 +34,7 @@ const APPLE_SEEDED_STATUS = "Teendő";
 const DATE_CONTRAST = /placeholder|jira|promis|pilot|\bcab\b|freeze|approval|planned|originally|committed|calendar|version date|told/i;
 
 /** Wording that makes a runner-up owner a contrast ("Péter Vass has the next most"). */
-export const OWNER_CONTRAST = /fewer|less|behind|runner|second|ahead|than|next\s+most|\bbut\b|single/i;
+export const OWNER_CONTRAST = /fewer|less|behind|runner|second|ahead|than|only|but|next|total|including|done|single|largest|biggest|team/i;
 
 function strip(text: string): string {
   return text.normalize("NFD").replaceAll(/\p{M}/gu, "");

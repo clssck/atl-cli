@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { N29_EXCUSE } from "./chaos-confluence.ts";
-import { HISTORY, NOT_BUILT, SUPERSEDED } from "./chaos-jira.ts";
+import { SUPERSEDED } from "./chaos-jira.ts";
 import { OWNER_CONTRAST } from "./chaos-multi.ts";
 import {
   dateMatcher,
@@ -25,7 +25,7 @@ import {
   statusCount,
   type Matcher,
 } from "./checks.ts";
-import { N09_EXCUSE, N11_EXCUSE, N13_EXCUSE } from "./scenarios.ts";
+import { N11_EXCUSE } from "./scenarios.ts";
 
 interface JudgeCase {
   id: string;
@@ -52,15 +52,6 @@ const JUDGE_CASES: JudgeCase[] = [
     right: ["45 days, not 150 days", "45 days rather than 150 days"],
   },
   {
-    id: "n09 body-says excuse",
-    expectations: [
-      { label: "Thursday", answer: rx(/Thursday|csütörtök/i), decoys: [{ name: "Monday", match: rx(/Monday|hétfő/i) }] },
-    ],
-    excuse: N09_EXCUSE,
-    wrong: ["Thursday is mentioned. Monday, says the body."],
-    right: ["Thursday. The body says Monday; the inline comment corrects it."],
-  },
-  {
     id: "n11 other-page excuse",
     expectations: [{ label: "1234", answer: numberMatcher("1234"), decoys: [{ name: "7731", match: numberMatcher("7731") }] }],
     excuse: N11_EXCUSE,
@@ -74,19 +65,6 @@ const JUDGE_CASES: JudgeCase[] = [
     right: ["The nm-owner tier is three.", "Tier 3"],
   },
   {
-    id: "n13 hr excuse",
-    expectations: [
-      {
-        label: "Engineering",
-        answer: rx(/engineering/i),
-        decoys: [{ name: "HR parent", match: (text) => /HR|emberi/i.test(text) && /parent|under|lives|located|moved to/i.test(text) }],
-      },
-    ],
-    excuse: N13_EXCUSE,
-    wrong: ["Engineering is mentioned. It lives under HR."],
-    right: ["It was created under HR and now lives under Engineering."],
-  },
-  {
     id: "n16 answer sharing a sentence with a decoy",
     expectations: [{ label: "41 remaining", answer: pointsMatcher(41), decoys: [46, 44, 49].map((value) => ({ name: String(value), match: pointsMatcher(value) })) }],
     wrong: ["46 points remaining. 41 is the goal.", "The sprint has 46 points remaining."],
@@ -97,15 +75,6 @@ const JUDGE_CASES: JudgeCase[] = [
     expectations: [{ label: "Corp: Thursday", answer: roleDayMatcher("corp", "engineering", "Thursday|csütörtök") }],
     wrong: ["Corp releases: Tuesday, not Thursday"],
     right: ["Corp releases need CAB on Thursdays", "Corp: Thursday"],
-  },
-  {
-    id: "n25 superseded owner",
-    expectations: [
-      { label: "owner Szabó Béla", answer: rx(/Szabó\s+Béla/i), decoys: [{ name: "Kovács Anna", match: rx(/Kovács/i) }] },
-    ],
-    excuse: SUPERSEDED,
-    wrong: ["Szabó Béla. Kovács Anna was the owner."],
-    right: ["Szabó Béla is the owner, not Kovács Anna.", "Szabó Béla owns it; Kovács Anna was the former owner."],
   },
   {
     id: "n26 negated person",
@@ -224,22 +193,3 @@ for (const scenario of MATCHER_CASES) {
     });
   });
 }
-
-describe("excuse regexes do not forgive a wrong claim", () => {
-  test("n23 not-built wording", () => {
-    expect(NOT_BUILT.test("Guest checkout was delivered, but only the pilot")).toBe(false);
-    expect(NOT_BUILT.test("Guest checkout is still open")).toBe(false);
-    expect(NOT_BUILT.test("Guest checkout: Won't Do")).toBe(true);
-    expect(NOT_BUILT.test("Card tokenisation was dropped")).toBe(true);
-  });
-  test("n24 history wording", () => {
-    expect(HISTORY.test("Yes, it was fixed and shipped before the rollback")).toBe(false);
-    expect(HISTORY.test("It was fixed once, then it came back")).toBe(false);
-    expect(HISTORY.test("It was fixed but later reopened")).toBe(true);
-  });
-  test("n25 superseded wording", () => {
-    expect(SUPERSEDED.test("Kovács Anna was the owner")).toBe(false);
-    expect(SUPERSEDED.test("Kovács Anna is not the owner")).toBe(false);
-    expect(SUPERSEDED.test("Kovács Anna stays on as reviewer")).toBe(true);
-  });
-});

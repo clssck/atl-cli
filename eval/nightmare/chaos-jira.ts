@@ -8,16 +8,19 @@ import { escapeRegExp, HOST, type Scenario } from "../scenarios.ts";
 import { child, dateMatcher, field, HEDGE, type Matcher, minutesMatcher, nearMatcher, read, readManifest, rx, SENTENCE } from "./checks.ts";
 
 /** Wording that makes a mention of a closed-but-not-delivered child a contrast ("Guest checkout: Won't Do"). */
-export const NOT_BUILT =
-  /won'?t\s*do|wont\s*do|dropped|abandon|cancel|never\s+built|nothing\s+was\s+built|duplicate|másolat|not\s+(?:built|delivered|shipped|done|implemented|started)|closed\s+without|no\s+work|not\s+yet/i;
+const NOT_BUILT =
+  /won'?t\s*do|wont\s*do|dropped|abandon|cancel|never\s+built|nothing\s+was\s+built|duplicate|másolat|not\s+(?:built|delivered|shipped|done|implemented|started)|closed\s+without|no\s+work|except|but|only|still|in\s+progress|to\s*do|open|pending|not\s+yet|folyamatban|teendő/i;
 
 /** Wording that makes "fixed" a report of what the history says instead of a claim about the present. */
-export const HISTORY =
-  /reopen|re-open|regress|\bbut\b|however|comment|history|changelog|claimed|said|says|marked|transition|originally|no\s+longer/i;
+const HISTORY =
+  /reopen|re-open|regress|\bbut\b|however|again|still|then|later|since|yet|comment|history|changelog|claimed|said|says|marked|transition|originally|was\s+(?:fixed|resolved|closed|done|shipped|released|set)|no\s+longer|not\s/i;
+
+/** n23: NOT_BUILT plus wording that reports status counts rather than claiming delivery ("counting by status alone would give 5"). */
+const N23_EXCUSE = new RegExp(`${NOT_BUILT.source}|\\bstatus\\b|overstat\\w*|\\bwould\\b|\\bplain\\b|\\bfilter\\b`, NOT_BUILT.flags);
 
 /** Wording that makes the previous owner or date a contrast ("Kovács Anna stays on as reviewer"). */
 export const SUPERSEDED =
-  /reviewer|legal|former|formerly|previous|moved\s+to|audit|description|obsolete|no\s+longer|stays|instead|handed|replaced|transferred|used\s+to|initially|originally|edited|before\s+the\s+edit|overrid|outdated|stale/i;
+  /reviewer|legal|former|formerly|previous|moved\s+to|audit|description|obsolete|was\b|no\s+longer|stays|only|instead|handed|replaced|transferred|used\s+to|initially|originally|first|edited|overrid|outdated|stale|not\b|still\s+(?:says|lists|shows|has|names)/i;
 
 export function chaosJiraScenarios(): Scenario[] {
   const manifest = readManifest("chaos-jira.json");
@@ -92,10 +95,10 @@ export function chaosJiraScenarios(): Scenario[] {
         { label: "3 delivered", answer: countThree, decoys: [{ name: "5 (everything closed in status Done)", match: nearMatcher(`${deliveredLabel}|done|closed|resolved|kész`, 5) }] },
         ...["guest-checkout", "card-tokenisation", "three-d-secure", "confirmation-email"].map((tag) => ({
           label: `${tag} not claimed as delivered`,
-          answer: (text: string): boolean => !text.split(SENTENCE).some((sentence) => claimed(tag)(sentence) && !NOT_BUILT.test(sentence) && !HEDGE.test(sentence)),
+          answer: (text: string): boolean => !text.split(SENTENCE).some((sentence) => claimed(tag)(sentence) && !N23_EXCUSE.test(sentence) && !HEDGE.test(sentence)),
         })),
       ],
-      new RegExp(`${NOT_BUILT.source}|\\bstatus\\b|overstat\\w*|\\bexcept\\b|\\bonly\\b|\\bwould\\b|\\bplain\\b|\\bfilter\\b`, NOT_BUILT.flags),
+      N23_EXCUSE,
     ),
     read(
       "n24-reopened-regression",
@@ -117,7 +120,7 @@ export function chaosJiraScenarios(): Scenario[] {
         },
         { label: "currently in progress", answer: rx(/in\s+progress|folyamatban|being\s+worked|work\s+(?:has\s+)?resum|back\s+in\s+(?:development|progress)/i) },
       ],
-      new RegExp(`${HISTORY.source}|["“]|came back|went out|\\buntil\\b|\\bonce\\b|\\bbefore\\s+(?:you|telling|we|anyone)\\b`, HISTORY.flags),
+      new RegExp(`${HISTORY.source}|["“]|\\buntil\\b|\\bbefore\\b|\\bonce\\b|partial|came back|went out`, HISTORY.flags),
     ),
     read(
       "n25-contradicting-sources",

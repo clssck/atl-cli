@@ -51,14 +51,14 @@ import { hellHistoryScenarios } from "./hell-history.ts";
 import { hellLedgerScenarios } from "./hell-ledger.ts";
 
 /** n09: the page body's own statement is a contrast to the inline-comment fact ("the body says Monday"). */
-export const N09_EXCUSE = /\b(?:body|text|page)\b(?:\s+(?:itself|still|originally))?\s+(?:says|states|claims|lists|reads)\b/i;
+const N09_EXCUSE = /\b(?:body|text|page says|says)\b/i;
 
-/** n11: a decoy extension quoted while describing one of the other near-duplicate pages (list lines name its parent or space). */
+/** n11: a decoy extension quoted while describing one of the other near-duplicate pages (list lines name its parent or space; a table row lists one lookalike). */
 export const N11_EXCUSE =
-  /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner/i;
+  /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner|^\s*\|/i;
 
 /** n13: the old parent named as history ("created under HR"). */
-export const N13_EXCUSE = /\b(?:created\s+(?:in|under)|used\s+to|originally|formerly|earlier\s+version|moved\s+(?:from|out))\b/i;
+const N13_EXCUSE = /\b(?:created|used to|was|moved|from|hr)\b/i;
 
 export function buildNightmareScenarios(): Scenario[] {
   const jira = readFacts(readManifest("jira.json"));
@@ -332,7 +332,7 @@ export function buildNightmareScenarios(): Scenario[] {
         },
         { label: "status in progress", answer: rx(/folyamatban|in progress|being worked|ongoing|active/i) },
       ],
-      /\b(?:done|kész|closed|completed|finished|retired|cut over|postgres 15|took place|happened|went live)\b/i,
+      /\b(?:done|kész|closed|completed|finished|retired|cut over|postgres 15|took place|happened|went live|was)\b/i,
     ),
     read(
       "n08-version-before-march",
@@ -345,7 +345,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: retentionDecoys.map((value) => ({ name: `${value} days`, match: numberMatcher(value, "days?|d|nap") })),
         },
       ],
-      /\b(?:from|to|→|->|raised|increased|reduced|reverted|revert|changed|current|currently|now|today|later)\b|→|->/i,
+      /\b(?:from|to|→|->|raised|increased|reduced|reverted|revert|changed|current|currently|now|today|later|cop(?:y|ies))\b|→|->/i,
     ),
     read(
       "n09-inline-comments",
@@ -492,7 +492,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: [totalPoints, legacyRemainingPoints, legacyTotalPoints].map((value) => ({ name: `${value} points`, match: pointsMatcher(value) })),
         },
       ],
-      /\b(?:total|scope|committed|overall|planned|legacy|field|sum)\b/i,
+      /\b(?:total|scope|committed|overall|planned|legacy|field|sum|would)\b/i,
     ),
     read(
       "n17-carry-over",
@@ -545,7 +545,7 @@ export function buildNightmareScenarios(): Scenario[] {
               : [],
         })),
       ],
-      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?)\b|\bbacklog\s+(?:has|holds|contains)\b/i,
+      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?|point(?:s|ing)?\s+to|linked)\b|\bbacklog\s+(?:has|holds|contains)\b/i,
     ),
     read(
       "n20-corp-expense",

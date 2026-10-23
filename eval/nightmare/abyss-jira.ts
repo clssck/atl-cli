@@ -23,7 +23,7 @@ function onlyMinutes(expected: number): Matcher {
 
 /** The option as the whole value ("D", "Option D", "Option D (shadow settlement ...)"); the letter is upper case. */
 function optionAnswer(letter: string): Matcher {
-  return rx(new RegExp(`^(?:[Oo]ption\\s+)?${letter}(?:\\s*[(:,–-].*)?$`));
+  return rx(new RegExp(`^(?:[Oo]ption\\s+)?${letter}(?:\\s*[(:,—–-].*)?$`));
 }
 
 /** The option named anywhere in the value, or the bare letter as the whole value. */

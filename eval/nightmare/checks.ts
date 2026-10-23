@@ -136,13 +136,14 @@ export function list(parent: Record<string, unknown>, name: string): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Invisible characters out, exotic spaces to plain spaces, digit grouping removed ("4,242.17",
- * "4 242.17", "4.242,17" -> "4242.17") and a two-digit decimal comma turned into a point.
+ * Invisible characters out, exotic spaces to plain spaces, markdown bold markers dropped ("**5** of 15"), digit
+ * grouping removed ("4,242.17", "4 242.17", "4.242,17" -> "4242.17") and a two-digit decimal comma turned into a point.
  */
 export function normalise(text: string): string {
   return text
     .replaceAll(/\u200B|\u200C|\u200D|\u2060|\uFEFF/g, "")
     .replaceAll(/[\u00A0\u202F\u2009]/g, " ")
+    .replaceAll("**", "")
     .replaceAll(/(\d{1,3}(?:\.\d{3})+),(\d{1,2})(?!\d)/g, (_match, whole: string, fraction: string) => `${whole.replaceAll(".", "")}.${fraction}`)
     .replaceAll(/(?<=\d)[, ](?=\d{3}(?!\d))/g, "")
     .replaceAll(/(?<=\d),(?=\d{2}(?!\d))/g, ".");
