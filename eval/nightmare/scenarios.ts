@@ -17,7 +17,6 @@ import {
   capture,
   captureAll,
   child,
-  countMatcher,
   dateMatcher,
   daysMatcher,
   eurMatcher,
@@ -42,12 +41,24 @@ import {
   statusCounts,
   writeMarker,
 } from "./checks.ts";
+import { abyssConfluenceScenarios } from "./abyss-confluence.ts";
+import { abyssJiraScenarios } from "./abyss-jira.ts";
 import { chaosConfluenceScenarios } from "./chaos-confluence.ts";
 import { chaosMultiScenarios } from "./chaos-multi.ts";
 import { chaosJiraScenarios } from "./chaos-jira.ts";
 import { hellConfluenceScenarios } from "./hell-confluence.ts";
 import { hellHistoryScenarios } from "./hell-history.ts";
 import { hellLedgerScenarios } from "./hell-ledger.ts";
+
+/** n09: the page body's own statement is a contrast to the inline-comment fact ("the body says Monday"). */
+export const N09_EXCUSE = /\b(?:body|text|page)\b(?:\s+(?:itself|still|originally))?\s+(?:says|states|claims|lists|reads)\b/i;
+
+/** n11: a decoy extension quoted while describing one of the other near-duplicate pages (list lines name its parent or space). */
+export const N11_EXCUSE =
+  /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner/i;
+
+/** n13: the old parent named as history ("created under HR"). */
+export const N13_EXCUSE = /\b(?:created\s+(?:in|under)|used\s+to|originally|formerly|earlier\s+version|moved\s+(?:from|out))\b/i;
 
 export function buildNightmareScenarios(): Scenario[] {
   const jira = readFacts(readManifest("jira.json"));
@@ -352,7 +363,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: [{ name: `contract ${contractWrong}`, match: dateMatcher(contractWrong) }],
         },
       ],
-      /\b(?:body|text|page says|says)\b/i,
+      N09_EXCUSE,
     ),
     read(
       "n10-deep-reply",
@@ -390,7 +401,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: [{ name: `tier ${tierWrong}`, match: nearMatcher("tier", Number(tierWrong)) }],
         },
       ],
-      /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner/i,
+      N11_EXCUSE,
     ),
     read(
       "n12-huge-page-cell",
@@ -422,7 +433,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: deskDecoys.map((value) => ({ name: `desk ${value}`, match: rx(new RegExp(`desk\\s*${value}\\b`, "i")) })),
         },
       ],
-      /\b(?:created|used to|was|moved|from|hr)\b/i,
+      N13_EXCUSE,
     ),
     read(
       "n14-wide-index",
@@ -495,8 +506,8 @@ export function buildNightmareScenarios(): Scenario[] {
         },
         {
           label: `${carriedPoints} points`,
-          answer: countMatcher(POINTS_LABEL, carriedPoints),
-          decoys: [{ name: `${carriedLegacy} points`, match: countMatcher(POINTS_LABEL, carriedLegacy) }],
+          answer: nearMatcher(POINTS_LABEL, carriedPoints),
+          decoys: [{ name: `${carriedLegacy} points`, match: nearMatcher(POINTS_LABEL, carriedLegacy) }],
         },
       ],
       /\b(?:duplicate|twin|only|two sprints|sprint 2|legacy|field|other|another)\b/i,
@@ -520,10 +531,10 @@ export function buildNightmareScenarios(): Scenario[] {
         {
           label: `${backlogKeys.length} issues`,
           answer: (text) =>
-            countMatcher(BACKLOG_LABEL, backlogKeys.length)(text) ||
+            nearMatcher(BACKLOG_LABEL, backlogKeys.length)(text) ||
             rx(new RegExp(`\\b${NUMBER_WORDS[backlogKeys.length] ?? "-"}\\b`, "i"))(text) ||
             rx(new RegExp(`(?<![\\d.\\-])${backlogKeys.length} of (?:the |all )?\\d+\\b`, "i"))(text),
-          decoys: [backlogWithDuplicates, backlogWithEpics].map((value) => ({ name: `${value} issues`, match: countMatcher(BACKLOG_LABEL, value) })),
+          decoys: [backlogWithDuplicates, backlogWithEpics].map((value) => ({ name: `${value} issues`, match: nearMatcher(BACKLOG_LABEL, value) })),
         },
         ...backlogKeys.map((key) => ({
           label: key,
@@ -578,5 +589,7 @@ export function buildNightmareScenarios(): Scenario[] {
     ...hellHistoryScenarios(),
     ...hellLedgerScenarios(),
     ...hellConfluenceScenarios(),
+    ...abyssJiraScenarios(),
+    ...abyssConfluenceScenarios(),
   ];
 }

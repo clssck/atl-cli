@@ -8,9 +8,7 @@
  */
 import { isRecord } from "../../src/core/guards.ts";
 import { escapeRegExp, HOST, type Scenario } from "../scenarios.ts";
-import { capture, countMatcher, factOf, field, type Matcher, minutesMatcher, read, readFacts, readManifest, rx } from "./checks.ts";
-
-const NUMBER_WORDS_TO_TWENTY = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+import { capture, factOf, field, type Matcher, minutesMatcher, nearMatcher, NUMBER_WORDS, read, readFacts, readManifest, rx } from "./checks.ts";
 
 function pageTitle(pages: unknown, key: string): string {
   if (!isRecord(pages)) {
@@ -42,6 +40,9 @@ function commandMatcher(command: string): Matcher {
 function bridgeMatcher(tail: string): Matcher {
   return rx(new RegExp(`555[\\s.\\-]?${tail}(?!\\d)`));
 }
+
+/** n29: the stale hand-written count or a total quoted as the page's claim, not as the answer. */
+export const N29_EXCUSE = /hand-?(?:written|counted)|manual|page says|page states|claims?|in total|altogether/i;
 
 export function chaosConfluenceScenarios(): Scenario[] {
   const manifest = readManifest("chaos-confluence.json");
@@ -137,15 +138,15 @@ export function chaosConfluenceScenarios(): Scenario[] {
       [
         {
           label: `${openCount} open`,
-          answer: rx(new RegExp(`(?<![\\d.\\-])${openCount}(?!\\d)|\\b${NUMBER_WORDS_TO_TWENTY[openCount] ?? "(?!)"}\\b`, "i")),
+          answer: rx(new RegExp(`(?<![\\d.\\-])${openCount}(?!\\d)|\\b${NUMBER_WORDS[openCount] ?? "(?!)"}\\b`, "i")),
           decoys: [
-            { name: `${staleCount} (hand-written count)`, match: countMatcher(openLabel, staleCount) },
-            { name: `${earlierCount} (earlier count)`, match: countMatcher(openLabel, earlierCount) },
-            { name: `${allCount} (all issues of 1.1)`, match: countMatcher(openLabel, allCount) },
+            { name: `${staleCount} (hand-written count)`, match: nearMatcher(openLabel, staleCount) },
+            { name: `${earlierCount} (earlier count)`, match: nearMatcher(openLabel, earlierCount) },
+            { name: `${allCount} (all issues of 1.1)`, match: nearMatcher(openLabel, allCount) },
           ],
         },
       ],
-      /hand-?(?:written|counted)|manual|page says|page states|claims?|in total|altogether/i,
+      N29_EXCUSE,
     ),
   ];
 }

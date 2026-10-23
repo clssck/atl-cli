@@ -9,7 +9,7 @@
  *   bun eval/run.ts run [--set macro|nightmare] [--rep N] [--arms atl,atl-pre,mcp] [--scenarios s1-needle-quartz,...]
  *                       [--tag label] [--sessions]
  *
- * `--set nightmare` runs n01-n15 (eval/nightmare/scenarios.ts) and writes to runs/<arm>-nm[-label]/.
+ * `--set nightmare` runs n01-n42 (eval/nightmare/scenarios.ts) and writes to runs/<arm>-nm[-label]/.
  *
  * `--tag r3` writes to runs/<arm>-r3/ (a later round; rebuild the atl binary first). Every command
  * recreates the arm workdirs and the skill copy, so only /tmp/atl-eval/bin/atl must exist.

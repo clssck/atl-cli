@@ -158,15 +158,36 @@ export function rx(pattern: RegExp): Matcher {
   return (text) => pattern.test(text);
 }
 
-/** `value` (already normalised, e.g. "4242.17") as a whole number, optionally followed by a unit. */
-export function numberMatcher(value: string, unit?: string): Matcher {
-  const body = `(?<![\\d.])${escapeRegExp(value)}(?!\\d|\\.\\d)`;
-  return rx(new RegExp(unit === undefined ? body : `${body}\\s*-?\\s*(?:${unit})(?![\\p{L}])`, "iu"));
+const WORD_UNITS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+const WORD_TENS = ["thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+const ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+
+/** English words for 0-20 and the tens up to 90, by value ("thirty" for 30). */
+export const NUMBER_WORDS: Record<number, string> = {
+  ...Object.fromEntries(WORD_UNITS.map((word, index) => [index, word])),
+  ...Object.fromEntries(WORD_TENS.map((word, index) => [(index + 3) * 10, word])),
+};
+
+/** `value` as a number of its own ("41", "41.0", or its English word): not part of a longer number, decimal or key such as NMS-44. */
+function numberForm(value: number): string {
+  const digits = `(?<![\\d.\\-])${value}(?:\\.0+)?(?!\\d|\\.\\d)`;
+  const word = NUMBER_WORDS[value];
+  return word === undefined ? digits : `(?:${digits}|\\b${word}\\b(?!-(?:one|two|three|four|five|six|seven|eight|nine)\\b))`;
 }
 
-/** `count` within 30 non-digit characters of a label, in either order. */
+/** `value` (already normalised, e.g. "4242.17") as a whole number; with a unit, an integer may also be spelled out ("thirty days"). */
+export function numberMatcher(value: string, unit?: string): Matcher {
+  const digits = `(?<![\\d.\\-])${escapeRegExp(value)}(?:\\.0+)?(?!\\d|\\.\\d)`;
+  if (unit === undefined) {
+    return rx(new RegExp(digits, "iu"));
+  }
+  const form = /^\d+$/.test(value) ? numberForm(Number(value)) : digits;
+  return rx(new RegExp(`${form}\\s*-?\\s*(?:${unit})(?![\\p{L}])`, "iu"));
+}
+
+/** `count` (digits or word) within 30 non-digit characters of a label, in either order; a number glued to a key ("NMS-44") does not count. */
 export function nearMatcher(label: string, count: number): Matcher {
-  const number = `(?<![\\d.])${count}(?!\\d)`;
+  const number = numberForm(count);
   return rx(new RegExp(`(?:${label})[^\\n\\d]{0,30}${number}|${number}[^\\n\\d]{0,30}(?:${label})`, "i"));
 }
 
@@ -191,7 +212,7 @@ export function dateMatcher(iso: string): Matcher {
   return rx(new RegExp(patterns.join("|"), "iu"));
 }
 
-export const DURATION_UNIT = "(?:days?|d|nap|hours?|hrs?|h|óra|ó|minutes?|mins?|m|perc)";
+export const DURATION_UNIT = "(?:days?|d|nap|hours?|hrs?|h|óra|ó|minutes?|mins?|m|perc|seconds?|secs?)";
 export const DURATION_RUN = new RegExp(`(?:\\d+(?:\\.\\d+)?\\s*${DURATION_UNIT}(?![\\p{L}])[\\s,]*(?:and\\s+)?)+`, "giu");
 export const DURATION_PART = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(${DURATION_UNIT})(?![\\p{L}])`, "giu");
 export const DURATION_CLOCK = /(\d+):(\d{2})\s*h(?![\p{L}])/giu;
@@ -215,6 +236,8 @@ export function minutesIn(text: string): number[] {
         days += value;
       } else if (initial === "h" || initial === "ó") {
         rest += value * 60;
+      } else if (initial === "s") {
+        rest += value / 60;
       } else {
         rest += value;
       }
@@ -228,39 +251,36 @@ export function minutesIn(text: string): number[] {
 }
 
 export function minutesMatcher(expected: number): Matcher {
-  return (text) => minutesIn(text).some((minutes) => Math.abs(minutes - expected) <= 1);
+  return (text) => minutesIn(text).some((minutes) => Math.round(minutes) === expected);
 }
 
 /** `value` as a number of its own: not part of a longer number, a decimal or a key such as NMS-44. */
 export function pointsMatcher(value: number): Matcher {
-  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)`));
+  return rx(new RegExp(`(?<![\\d.\\-])${value}(?:\\.0+)?(?!\\d|\\.\\d)`));
 }
 
 export const POINTS_LABEL = "points?|estimates?|\\bSPs?\\b|pts";
 export const BACKLOG_LABEL = "backlog|issues|items|tickets|stories|work items";
-export const NUMBER_WORDS: Record<number, string> = { 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven" };
-
-/** Like nearMatcher, but a number glued to a key ("NMS-44") does not count. */
-export function countMatcher(label: string, count: number): Matcher {
-  const number = `(?<![\\d.\\-])${count}(?!\\d)`;
-  return rx(new RegExp(`(?:${label})[^\\n\\d]{0,30}${number}|${number}[^\\n\\d]{0,30}(?:${label})`, "i"));
-}
 
 /** `value` next to "Sprint <n>" in either order within one line, without another "sprint" in between. */
 export function sprintMatcher(sprint: string, value: number): Matcher {
-  const label = `sprint\\s*${sprint}(?!\\d)`;
-  const number = `(?<![\\d.\\-])${value}(?!\\d)`;
+  const word = NUMBER_WORDS[Number(sprint)];
+  const ordinal = ORDINALS[Number(sprint) - 1];
+  const spelled = [`${sprint}(?!\\d)`, ...(word === undefined ? [] : [`${word}\\b`])].join("|");
+  const label = `(?:sprint\\s*(?:${spelled})${ordinal === undefined ? "" : `|\\b${ordinal}\\s+sprint`})`;
+  const number = numberForm(value);
   const gap = String.raw`(?:(?!sprint)[^\n]){0,60}?`;
   return rx(new RegExp(`${label}${gap}${number}|${number}${gap}${label}`, "i"));
 }
 
 /** `value` EUR as "25 EUR", "25 euros" or "€25". */
 export function eurMatcher(value: number): Matcher {
-  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)\\s*(?:EUR|euros?|€)|€\\s*${value}(?!\\d)`, "i"));
+  const currency = "(?:EUR|euros?|€)";
+  return rx(new RegExp(`${numberForm(value)}\\s*${currency}|${currency}\\s*${value}(?:\\.0+)?(?!\\d|\\.\\d)`, "i"));
 }
 
 export function daysMatcher(value: number): Matcher {
-  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)\\s*-?\\s*(?:(?:calendar\\s+|business\\s+|working\\s+)?days?|nap)(?![\\p{L}])`, "iu"));
+  return rx(new RegExp(`${numberForm(value)}\\s*-?\\s*(?:(?:calendar\\s+|business\\s+|working\\s+)?days?|nap)(?![\\p{L}])`, "iu"));
 }
 
 /**
@@ -268,7 +288,7 @@ export function daysMatcher(value: number): Matcher {
  * "Thursdays (Corp); ..." (the reverse order stops at a ';' or table pipe).
  */
 export function roleDayMatcher(role: string, other: string, day: string): Matcher {
-  const forward = `${role}(?:(?!${other})[^\\n.]){0,60}?(?:${day})`;
+  const forward = `${role}(?:(?!${other}|not\\b)[^\\n.]){0,60}?(?:${day})`;
   const reverse = `(?:${day})[^\\n.;|]{0,30}?${role}`;
   return rx(new RegExp(`${forward}|${reverse}`, "i"));
 }
@@ -298,10 +318,10 @@ export function judge(raw: string, expectations: Expectation[], excuse?: RegExp)
 
 /** Jira shows Hungarian status names; JQL and the MCP use the English ones. */
 export const STATUS_ALIASES: Record<string, string> = {
-  Teendő: "To Do|To-Do|Todo",
+  Teendő: "To Do|To-Do|Todo|Teendo",
   Folyamatban: "In Progress",
-  "Ellenőrzés alatt": "In Review",
-  Kész: "Done",
+  "Ellenőrzés alatt": "In Review|Ellenorzes alatt",
+  Kész: "Done|Kesz",
 };
 
 export function statusCount(status: string, count: number): Matcher {

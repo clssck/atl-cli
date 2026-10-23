@@ -13,10 +13,10 @@ import { HOST, markerCount, type Scenario, verdict } from "../scenarios.ts";
 import {
   asRecords,
   child,
-  countMatcher,
   dateMatcher,
   field,
   type Matcher,
+  nearMatcher,
   numberField,
   read,
   readManifest,
@@ -34,7 +34,7 @@ const APPLE_SEEDED_STATUS = "Teendő";
 const DATE_CONTRAST = /placeholder|jira|promis|pilot|\bcab\b|freeze|approval|planned|originally|committed|calendar|version date|told/i;
 
 /** Wording that makes a runner-up owner a contrast ("Péter Vass has the next most"). */
-const OWNER_CONTRAST = /fewer|less|behind|runner|second|ahead|than|only|but|next|total|including|done|single|largest|biggest|team/i;
+export const OWNER_CONTRAST = /fewer|less|behind|runner|second|ahead|than|next\s+most|\bbut\b|single/i;
 
 function strip(text: string): string {
   return text.normalize("NFD").replaceAll(/\p{M}/gu, "");
@@ -82,7 +82,7 @@ export function chaosMultiScenarios(): Scenario[] {
     .map((owner) => field(owner, "name"))
     .filter((name) => name !== winner);
   const winnerCount = (text: string): boolean =>
-    countMatcher("open|issues?|tickets?", winnerOpen)(text) ||
+    nearMatcher("open|issues?|tickets?", winnerOpen)(text) ||
     rx(new RegExp(`${strip(winner).split(" ").join("[^\\n\\d]{0,40}")}[^\\n\\d]{0,40}(?<![\\d.\\-])${winnerOpen}(?!\\d)`, "i"))(strip(text));
 
   const wikiSpace = field(postmortem, "space");

@@ -8,11 +8,13 @@ Token and agent-friendliness eval of `atl` against the Atlassian Remote MCP (v1)
 | `lib.ts` | shared plumbing: binary path, subprocess runner, `omp toks` counts, MCP session, manifest loader |
 | `micro.ts` | one call each: 15 atl command / MCP tool pairs; bytes, Claude tokens, info-parity check |
 | `scenarios.ts` | eight natural-language scenarios (s1-s8) with answer checks from the manifest |
-| `nightmare/scenarios.ts` | forty-two scenarios (n01-n42) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence,chaos-jira,chaos-confluence,chaos-multi,hell-history,hell-ledger,hell-confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/scenarios.ts` | forty-seven scenarios (n01-n47) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence,chaos-jira,chaos-confluence,chaos-multi,hell-history,hell-ledger,hell-confluence,abyss-jira,abyss-confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/negative.test.ts` | negative controls for the lenient checks: plausible wrong replies fail, correct phrasings pass; runs under `bun test` without `.out` |
 | `nightmare/checks.ts` | shared answer checks: manifest readers, matchers, decoy judging, strict `ANSWER <slot>:` line judging |
 | `nightmare/chaos-{jira,confluence}.ts` | n22-n29 (moved issue, abandoned vs delivered, reopened regression, contradicting sources; excerpt-include, expand + deprecated, renamed page, Jira macro vs stale count) |
 | `nightmare/chaos-multi.ts` | n30-n33: multi-hop (postmortem → bug → linked fix → release calendar; owners table × open-issue counts) and writes with traps (comment on the current runbook, not its "(OLD)" twin; transition the real issue, not its `[DUPLICATE]`) |
 | `nightmare/hell-{history,ledger,confluence}.ts` | n34-n42, the strict set: priority at the second entry into In Progress buried in ~140 changelog entries; worklogs by New York date across the EU DST switch, sub-task included; review transition plus a dated worklog (write); a sum over >100 issues with corrected amounts and boundary due dates; duplicate-link direction against stale descriptions; ADF date nodes in an expand; a prompt-injection banner against the approved table; a homoglyph twin of a linked page with rowspan cells; unticked tasks under a stale "all complete" line. Only the `ANSWER <slot>:` lines the prompt asks for are judged |
+| `nightmare/abyss-{jira,confluence}.ts` | n43-n47, strict, data that a default first page or embedded field hides: the final decision in comment 240 of 240; October worklogs (Budapest time) among 45 when an issue embeds only 20; a comment on all 27 open labelled issues (write, more than one search page); tier-3 merchants among 130 child pages; a four-hop chain review page → epic → root-cause child → remote link → contract page |
 | `nightmare/seed-scrum.ts` | read-only verifier of the Scrum project NMS and the second space NMCORP; writes `.out/nightmare/scrum.json` |
 | `run.ts` | macro eval: headless `omp -p` agents per arm and scenario; metrics per run |
 | `report.ts` | builds `.out/report.md` from `micro.json` and the run metrics |
@@ -39,7 +41,7 @@ bun eval/nightmare/seed-jira.ts          # ~110 KAN issues labelled nightmare; m
 bun eval/nightmare/seed-confluence.ts    # ~143 pages under "atl smoke nm Corporate Wiki"; manifest .out/nightmare/confluence.json
 ```
 
-The corporate-nightmare seeders drive the CLI binary above (`NM_ATL=<path>` for another one), are idempotent (re-runs find existing content by label or title and only rebuild the manifest), and plant the `facts` the n01-n15 scenarios check. Everything they create is prefixed `atl smoke nm`.
+The corporate-nightmare seeders drive the CLI binary above (`NM_ATL=<path>` for another one), are idempotent (re-runs find existing content by label or title and only rebuild the manifest), and plant the `facts` the n01-n42 scenarios check. Everything they create is prefixed `atl smoke nm`.
 
 ```bash
 bun eval/nightmare/seed-scrum.ts         # read-only check of project NMS and space NMCORP; manifest .out/nightmare/scrum.json
@@ -54,6 +56,8 @@ bun eval/nightmare/seed-chaos-multi.ts        # NMS-57..72 + 5 pages for n30-n33
 bun eval/nightmare/seed-hell-history.ts       # n34-n36: changelog, DST worklogs, review target; manifest .out/nightmare/hell-history.json
 bun eval/nightmare/seed-hell-ledger.ts        # n37, n38, n42: ~150 ledger issues, duplicate set, ADF dates; manifest .out/nightmare/hell-ledger.json
 bun eval/nightmare/seed-hell-confluence.ts    # n39-n41 pages under "atl smoke nm hell"; manifest .out/nightmare/hell-confluence.json
+bun eval/nightmare/seed-abyss-jira.ts         # n43-n45: 240-comment thread, 45 worklogs, 38 rollout issues; manifest .out/nightmare/abyss-jira.json
+bun eval/nightmare/seed-abyss-confluence.ts   # n46-n47: 130-child register, incident chain with epic and remote link; manifest .out/nightmare/abyss-confluence.json
 ```
 
 The chaos seeders are idempotent and verify by reading back. n29's answer is the live result of the readiness page's JQL (open NMS issues on fixVersion 1.1): re-run `seed-chaos-confluence.ts` after changing those issues.
