@@ -73,15 +73,28 @@ Method, scenarios and scripts: [eval/README.md](eval/README.md).
 
 ## Install and build
 
+Install from npm; Bun >= 1.4.3 must be on PATH at runtime (the `atl` launcher re-executes under Bun with `.env` autoloading disabled):
+
+```bash
+bun add -g atl-cli                # or: npm i -g atl-cli
+atl --help
+atl auth login                    # opens the browser; approve, then return
+atl doctor
+```
+
+From source:
+
 ```bash
 bun install
 bun src/main.ts --help
-bun src/main.ts auth login      # opens the browser; approve, then return
-bun src/main.ts doctor
-bun run build                   # dist/atl: single binary (--compile --minify --bytecode)
-bun run build:linux             # dist/atl-linux
-bun run build:windows           # dist/atl.exe
+bun run build                     # dist/atl.js: Bun-targeted bundle, run via bin/atl.js
+bun run compile                   # dist/atl: single native binary (--compile --minify --bytecode)
+bun run compile:linux             # dist/atl-linux
+bun run compile:windows           # dist/atl.exe
+bun run test:platform             # pack, install into a temp dir, smoke the installed atl
 ```
+
+Releases: dispatch the Release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) with a patch/minor/major bump. It prepares one versioned candidate (`npm version` syncs `plugin.json` and cuts the `[Unreleased]` changelog section), runs CI on Linux, macOS and Windows against that exact tarball, publishes it to npm with provenance, then pushes the version commit and tag atomically and creates the GitHub Release. Publishing needs an npm trusted publisher configured for `clssck/atl-cli` (workflow `release.yml`).
 
 ## Auth
 
@@ -212,7 +225,7 @@ bun run check    # tsc, type-aware oxlint (warnings denied), oxfmt --check, bun 
 bun run fmt
 ```
 
-Repository flow, conventions and the MCP upgrade procedure are in [AGENTS.md](AGENTS.md). CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `bun run check` on pushes to main and on pull requests.
+Repository flow, conventions and the MCP upgrade procedure are in [AGENTS.md](AGENTS.md). CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs typecheck, lint, format, `bun run verify`, build, tests and the packaged-CLI smoke on pushes to main and on pull requests (Linux), and on Linux, macOS and Windows for releases and manual dispatches.
 
 `.omp/mcp.json` points omp at the v1 `authv2` MCP endpoint for this project (overriding the user-level `atlassian` server); authorize it with `/mcp reauth atlassian`.
 
@@ -225,3 +238,7 @@ Repository flow, conventions and the MCP upgrade procedure are in [AGENTS.md](AG
   2. With `ATL_CONFIG_DIR=$D ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp`, run `mcp tools --snapshot --pretty --output mcp/tools-v2.json` and `mcp tools --catalog --pretty --output mcp/operations-v2.json`.
   3. `bun test test/parity.test.ts`; map every new name to a command or add a `mcp/gaps-v2.json` entry with probe evidence.
   4. `rm -rf "$D"`, then `bun scripts/mcp-watch.ts --write`.
+
+## License
+
+MIT ([LICENSE](LICENSE)); keep the copyright notice / credit clssck.

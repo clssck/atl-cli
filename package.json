@@ -1,6 +1,47 @@
 {
-  "name": "atl",
-  "version": "0.1.0",
+  "name": "atl-cli",
+  "version": "0.0.0",
+  "description": "JSON CLI for Confluence and Jira Cloud over REST, using the Atlassian MCP OAuth flow",
+  "homepage": "https://github.com/clssck/atl-cli",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clssck/atl-cli.git"
+  },
+  "bin": {
+    "atl": "bin/atl.js"
+  },
+  "files": [
+    "dist/atl.js",
+    "CHANGELOG.md",
+    "plugin.json",
+    "skills/",
+    "bin/atl.js",
+    "bin/bun-version.js"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "atl": "bun src/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint -c .oxlintrc.json --type-aware --deny-warnings src test scripts",
+    "lint:fix": "oxlint -c .oxlintrc.json --type-aware --deny-warnings --fix src test scripts",
+    "fmt": "oxfmt -c .oxfmtrc.json src test scripts bin",
+    "fmt:check": "oxfmt -c .oxfmtrc.json --check src test scripts bin",
+    "verify": "bun scripts/sync-plugin-version.ts --check && bun scripts/cut-changelog.ts --check",
+    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run verify && bun run test",
+    "build": "bun build src/main.ts --target=bun --minify --outfile dist/atl.js",
+    "compile": "bun build --compile --minify --bytecode src/main.ts --outfile dist/atl",
+    "compile:windows": "bun build --compile --minify --bytecode --target=bun-windows-x64 src/main.ts --outfile dist/atl.exe",
+    "compile:linux": "bun build --compile --minify --bytecode --target=bun-linux-x64 src/main.ts --outfile dist/atl-linux",
+    "prepack": "bun scripts/sync-plugin-version.ts --check && bun run build",
+    "prepublishOnly": "bun run prepack",
+    "version": "bun scripts/sync-plugin-version.ts && bun scripts/cut-changelog.ts && git add plugin.json CHANGELOG.md",
+    "test:platform": "bun scripts/platform-smoke.ts"
+  },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "oxfmt": "^0.74.0",
@@ -8,24 +49,8 @@
     "oxlint-tsgolint": "^7.0.2004",
     "typescript": "^7.0.2"
   },
-  "bin": {
-    "atl": "src/main.ts"
+  "engines": {
+    "bun": ">=1.4.3"
   },
-  "description": "JSON CLI for Confluence and Jira Cloud over REST, using the Atlassian MCP OAuth flow",
-  "packageManager": "bun@>=1.4",
-  "private": true,
-  "scripts": {
-    "atl": "bun src/main.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "lint": "oxlint -c .oxlintrc.json --type-aware --deny-warnings src test scripts",
-    "lint:fix": "oxlint -c .oxlintrc.json --type-aware --deny-warnings --fix src test scripts",
-    "fmt": "oxfmt -c .oxfmtrc.json src test scripts",
-    "fmt:check": "oxfmt -c .oxfmtrc.json --check src test scripts",
-    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test",
-    "build": "bun build --compile --minify --bytecode src/main.ts --outfile dist/atl",
-    "build:windows": "bun build --compile --minify --bytecode --target=bun-windows-x64 src/main.ts --outfile dist/atl.exe",
-    "build:linux": "bun build --compile --minify --bytecode --target=bun-linux-x64 src/main.ts --outfile dist/atl-linux"
-  },
-  "type": "module"
+  "packageManager": "bun@>=1.4"
 }

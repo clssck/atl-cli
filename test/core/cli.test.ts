@@ -17,6 +17,7 @@ import {
 } from "../../src/core/cli.ts";
 import "../../src/commands/index.ts";
 import { AtlError } from "../../src/core/errors.ts";
+import { VERSION } from "../../src/version.ts";
 
 const sample = defineCommand({
   name: "thing.get",
@@ -724,7 +725,7 @@ describe("runCli", () => {
 
   test("--pretty indents; --version and --help are plain text", async () => {
     expect((await runAtl(["thing", "get", "5", "--pretty"])).stdout).toContain('\n  "id": "5"');
-    expect((await runAtl(["--version"])).stdout).toBe("atl 0.1.0\n");
+    expect((await runAtl(["--version"])).stdout).toBe(`atl ${VERSION}\n`);
     const help = await runAtl(["--help"]);
     expect(help.stdout).toContain("Exit codes:");
     expect(help.stdout).not.toContain("\u001B[");
