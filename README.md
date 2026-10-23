@@ -16,33 +16,58 @@ Headless agents answer the same natural-language questions against seeded data o
 - `atl-pre`: the same, with the skill preloaded in the system prompt.
 - `mcp`: the Atlassian Remote MCP **v1** endpoint.
 
-**Corporate-nightmare set, n01-n33** (99 runs per arm; means per question):
+All three sets below come from one run (tag `r4`) of the current build and skill. Means are per question.
+
+**Corporate-nightmare set, n01-n33** (99 runs per arm, writes included):
 
 | | atl | atl-pre | mcp |
 |---|---|---|---|
-| correct | 99/99 | 99/99 | 93/99 |
-| tool calls | 3.56 | 2.64 | 3.89 |
-| tool-result tokens | 1,878 | 1,129 | 8,064 |
-| total tokens | 84k | 69k | 124k |
-| cost | $0.068 | $0.063 | $0.154 |
-| wall time | 22.1 s | 19.4 s | 28.1 s |
+| correct | 99/99 | 99/99 | 98/99 |
+| tool calls | 3.32 | 2.31 | 3.99 |
+| tool-result tokens | 2,052 | 983 | 8,489 |
+| total tokens | 80k | 62k | 128k |
+| cost | $0.057 | $0.048 | $0.144 |
+| wall time | 19.8 s | 17.2 s | 25.6 s |
 
-n33 is counted from its re-run with a fixed write check (3/3 in every arm). The six MCP misses: it could not read a 300 KB page (twice), has no page-properties tool, and miscounted a backlog, a status count and a worklog total.
+The MCP miss is a page-properties question: it has no tool that reads content properties. In the previous run of this set, atl was 99/99, atl-pre 99/99 and mcp 93/99, at $0.068, $0.063 and $0.155 per question.
 
-**Strict set, n34-n42** (reads: 24 runs per arm; only the `ANSWER` lines the prompt asks for are judged):
+**Strict set, n34-n42** (reads, 24 runs per arm; only the `ANSWER` lines the prompt asks for are judged):
 
 | | atl | atl-pre | mcp |
 |---|---|---|---|
-| correct | 24/24 | 24/24 | 24/24 |
-| tool calls | 3.67 | 2.42 | 9.42 |
-| tool-result tokens | 3,977 | 2,131 | 9,131 |
-| total tokens | 91k | 70k | 377k |
-| cost | $0.078 | $0.065 | $0.271 |
-| wall time | 25.7 s | 26.0 s | 85.6 s |
+| correct | 24/24 | 24/24 | 23/24 |
+| tool calls | 3.25 | 2.29 | 9.17 |
+| tool-result tokens | 3,871 | 3,102 | 10,027 |
+| total tokens | 84k | 68k | 389k |
+| cost | $0.066 | $0.058 | $0.272 |
+| wall time | 18.5 s | 16.5 s | 72.2 s |
 
-On a 151-entry change history and a worklog question across a DST switch, MCP needed about 29-30 calls and $0.64-0.83 per question; atl-pre needed 2-4 calls and about $0.06-0.11. The write scenarios (n33, n36) passed 9/9 per arm, with transitions verified in the issue history.
+**Abyss set, n43-n47** (15 runs per arm): answers that a default first page or an embedded field hides. These are the last of 240 comments; worklogs beyond the 20 an issue embeds; a write to 27 issues spread over two search pages; 130 child pages; and a four-hop chain from a page through Jira to a remote link.
 
-Caveats: the MCP arm is v1; v2 was not measured. Three repetitions make the accuracy numbers directional; the token and cost gaps are large and consistent across both sets. Runs use `--no-session`, so tool results the harness spills to `artifact://` are unreadable to the agent, which affects the MCP arm on large pages and lists. Method, scenarios and scripts: [eval/README.md](eval/README.md).
+| | atl | atl-pre | mcp |
+|---|---|---|---|
+| correct | 15/15 | 15/15 | 12/15 |
+| tool calls | 5.13 | 4.27 | 8.27 |
+| tool-result tokens | 7,203 | 4,257 | 12,203 |
+| total tokens | 131k | 108k | 294k |
+| cost | $0.102 | $0.078 | $0.233 |
+| wall time | 27.8 s | 25.0 s | 122.5 s |
+
+MCP's abyss misses:
+
+- On the worklog question it retrieved 20 of 45 worklogs and gave no total.
+- The 130-child register and the four-hop chain each ran past the 600 s cap once.
+
+The review-and-worklog write (n36) passed 3/3 in every arm, each run with its own transition in the issue history.
+
+Caveats:
+
+- The MCP arm is v1; v2 was not measured.
+- Three repetitions make the accuracy numbers directional. The token and cost gaps are large and consistent across all three sets.
+- Runs use `--no-session`, so tool results that the harness spills to `artifact://` are unreadable to the agent. This affects the MCP arm on large pages and lists.
+- Arms ran concurrently against one site. One atl-pre write run waited out an HTTP 429 and is excluded from the wall-time mean.
+
+Method, scenarios and scripts: [eval/README.md](eval/README.md).
 
 ## Install and build
 
