@@ -5,7 +5,13 @@
 import { isRecord } from "../src/core/guards.ts";
 import { atl, needle, type Manifest } from "./lib.ts";
 
-export type Arm = "atl" | "mcp";
+/** `atl-pre` is the atl arm with the skill text preloaded into the system prompt instead of a skill file. */
+export const ARMS = ["atl", "atl-pre", "mcp"] as const;
+export type Arm = (typeof ARMS)[number];
+
+export function isArm(value: unknown): value is Arm {
+  return ARMS.some((arm) => arm === value);
+}
 
 export interface Check {
   success: boolean;
@@ -20,6 +26,11 @@ export interface Scenario {
   prompt(arm: Arm, target: string | undefined): string;
   /** Write scenarios only: picks the run's target; without it the runner picks an unused Teendő issue (s8). */
   pickTarget?: () => string;
+  /**
+   * Write scenarios with one shared target: restores its seeded state before each live run, so the run has to make the
+   * change itself. Never called by rejudge, which skips these scenarios (their verdict depends on the live run window).
+   */
+  prepare?: () => Promise<void>;
   /** Judge the final assistant text; write scenarios also read the target back with atl. */
   check(finalText: string, arm: Arm, target?: string): Check | Promise<Check>;
 }

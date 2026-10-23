@@ -2,7 +2,7 @@
  * Macro-eval scenarios on the corporate-nightmare dataset (eval/nightmare/seed-*.ts). Prompts are
  * natural-language (no tool or command names; the site host appears once); every expected value is
  * derived from the `facts` of eval/.out/nightmare/{jira,confluence}.json (n01-n15), the verified values of
- * scrum.json (n16-n21) and chaos-{jira,confluence}.json (n22-n29, eval/nightmare/chaos-*.ts) at load time. Checks
+ * scrum.json (n16-n21) and chaos-{jira,confluence,multi}.json (n22-n33, eval/nightmare/chaos-*.ts) at load time. Checks
  * normalise formatting (thousand separators, decimal commas, date styles, duration units) and
  * reject the planted decoys: a decoy value stated without the answer next to it and without a
  * hedge ("earlier", "not", "comment 4 says", ...) fails.
@@ -43,7 +43,11 @@ import {
   writeMarker,
 } from "./checks.ts";
 import { chaosConfluenceScenarios } from "./chaos-confluence.ts";
+import { chaosMultiScenarios } from "./chaos-multi.ts";
 import { chaosJiraScenarios } from "./chaos-jira.ts";
+import { hellConfluenceScenarios } from "./hell-confluence.ts";
+import { hellHistoryScenarios } from "./hell-history.ts";
+import { hellLedgerScenarios } from "./hell-ledger.ts";
 
 export function buildNightmareScenarios(): Scenario[] {
   const jira = readFacts(readManifest("jira.json"));
@@ -262,7 +266,7 @@ export function buildNightmareScenarios(): Scenario[] {
           ],
         },
       ],
-      /withdr[ae]w|withdrawn/i,
+      /withdr[ae]w|withdrawn|\b(?:first|correction|corrected|quote)\b/i,
     ),
     read(
       "n04-ratecard-cell",
@@ -317,7 +321,7 @@ export function buildNightmareScenarios(): Scenario[] {
         },
         { label: "status in progress", answer: rx(/folyamatban|in progress|being worked|ongoing|active/i) },
       ],
-      /\b(?:done|kész|closed|completed|finished|retired|cut over|postgres 15)\b/i,
+      /\b(?:done|kész|closed|completed|finished|retired|cut over|postgres 15|took place|happened|went live)\b/i,
     ),
     read(
       "n08-version-before-march",
@@ -330,7 +334,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: retentionDecoys.map((value) => ({ name: `${value} days`, match: numberMatcher(value, "days?|d|nap") })),
         },
       ],
-      /\b(?:from|to|→|->|raised|increased|reduced|reverted|revert|changed)\b|→|->/i,
+      /\b(?:from|to|→|->|raised|increased|reduced|reverted|revert|changed|current|currently|now|today|later)\b|→|->/i,
     ),
     read(
       "n09-inline-comments",
@@ -386,7 +390,7 @@ export function buildNightmareScenarios(): Scenario[] {
           decoys: [{ name: `tier ${tierWrong}`, match: nearMatcher("tier", Number(tierWrong)) }],
         },
       ],
-      /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated)\b/i,
+      /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner/i,
     ),
     read(
       "n12-huge-page-cell",
@@ -530,7 +534,7 @@ export function buildNightmareScenarios(): Scenario[] {
               : [],
         })),
       ],
-      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?)\b/i,
+      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?)\b|\bbacklog\s+(?:has|holds|contains)\b/i,
     ),
     read(
       "n20-corp-expense",
@@ -570,5 +574,9 @@ export function buildNightmareScenarios(): Scenario[] {
     ),
     ...chaosJiraScenarios(),
     ...chaosConfluenceScenarios(),
+    ...chaosMultiScenarios(),
+    ...hellHistoryScenarios(),
+    ...hellLedgerScenarios(),
+    ...hellConfluenceScenarios(),
   ];
 }

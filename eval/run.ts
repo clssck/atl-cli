@@ -6,7 +6,7 @@
  *   bun eval/run.ts probe                          verify the arms' tool surface (1 prompt each)
  *   bun eval/run.ts rejudge                        re-apply the answer checks (both sets) to saved final texts
  *   bun eval/run.ts list [--set macro|nightmare]   scenario ids, kind and name (no model call)
- *   bun eval/run.ts run [--set macro|nightmare] [--rep N] [--arms atl,mcp] [--scenarios s1-needle-quartz,...]
+ *   bun eval/run.ts run [--set macro|nightmare] [--rep N] [--arms atl,atl-pre,mcp] [--scenarios s1-needle-quartz,...]
  *                       [--tag label] [--sessions]
  *
  * `--set nightmare` runs n01-n15 (eval/nightmare/scenarios.ts) and writes to runs/<arm>-nm[-label]/.
@@ -14,7 +14,9 @@
  * `--tag r3` writes to runs/<arm>-r3/ (a later round; rebuild the atl binary first). Every command
  * recreates the arm workdirs and the skill copy, so only /tmp/atl-eval/bin/atl must exist.
  *
- * Arms: `atl` has the atl skill and binary on PATH and the Atlassian MCP server disabled; `mcp` has
+ * Arms: `atl` has the atl skill and binary on PATH and the Atlassian MCP server disabled; `atl-pre` is
+ * `atl` with the skill text appended to the system prompt instead of a discoverable skill file (no
+ * skill read costs a tool call); `mcp` has
  * the MCP v1 server configured with atl's bearer (via the child's env only) and no atl on PATH.
  * Per run it writes eval/.out/runs/<arm>[-<tag>]/<scenario>-<rep>.{jsonl,stderr.txt,metrics.json}.
  * Runs are sequential, arms interleaved per scenario. The bearer is never printed or stored.
@@ -36,9 +38,12 @@ import {
   writeJson,
 } from "./lib.ts";
 import { buildNightmareScenarios } from "./nightmare/scenarios.ts";
-import { type Arm, buildScenarios, type Check, type Scenario, WRITE_FROM, writeCandidates } from "./scenarios.ts";
+import { ARMS, type Arm, buildScenarios, type Check, isArm, type Scenario, WRITE_FROM, writeCandidates } from "./scenarios.ts";
 
-const ARMS: Arm[] = ["atl", "mcp"];
+/** Arms a run uses when --arms is not given; `atl-pre` is opt-in so existing invocations keep their cost. */
+const DEFAULT_ARMS: readonly Arm[] = ["atl", "mcp"];
+/** Skill text file for the `atl-pre` arm, passed to omp with --append-system-prompt. */
+const PRELOAD_FILE = "skill-preload.md";
 const RUNS = join(OUT, "runs");
 const MAX_TIME = "10m";
 const SESSION_DIR = "/tmp/atl-eval/sessions";
@@ -105,13 +110,16 @@ function armDir(arm: Arm): string {
 
 function setupArms(): void {
   const skill = readFileSync(join(import.meta.dir, "..", "skills", "atl", "SKILL.md"), "utf8");
+  const atlMcp = `${JSON.stringify({ mcpServers: { atlassian: { type: "http", url: "https://mcp.atlassian.com/v2/mcp", enabled: false } } })}\n`;
   const atlDir = armDir("atl");
   mkdirSync(join(atlDir, ".omp", "skills", "atl"), { recursive: true });
-  writeFileSync(
-    join(atlDir, ".omp", "mcp.json"),
-    `${JSON.stringify({ mcpServers: { atlassian: { type: "http", url: "https://mcp.atlassian.com/v2/mcp", enabled: false } } })}\n`,
-  );
+  writeFileSync(join(atlDir, ".omp", "mcp.json"), atlMcp);
   writeFileSync(join(atlDir, ".omp", "skills", "atl", "SKILL.md"), skill);
+  // atl-pre: same tool surface, but no skills dir, so the skill can only come from the system prompt.
+  const preDir = armDir("atl-pre");
+  mkdirSync(join(preDir, ".omp"), { recursive: true });
+  writeFileSync(join(preDir, ".omp", "mcp.json"), atlMcp);
+  writeFileSync(join(preDir, PRELOAD_FILE), skill);
   const mcpDir = armDir("mcp");
   mkdirSync(join(mcpDir, ".omp"), { recursive: true });
   writeFileSync(
@@ -124,7 +132,7 @@ async function armEnv(arm: Arm): Promise<Record<string, string | undefined>> {
   const base = { ...process.env };
   delete base.ATL_EVAL_BEARER;
   const path = (base.PATH ?? "").split(":").filter((entry) => entry !== ATL_BIN_DIR);
-  if (arm === "atl") {
+  if (arm !== "mcp") {
     return { ...base, PATH: [ATL_BIN_DIR, ...path].join(":") };
   }
   return { ...base, PATH: path.join(":"), ATL_EVAL_BEARER: await bearer() };
@@ -137,8 +145,9 @@ async function armEnv(arm: Arm): Promise<Record<string, string | undefined>> {
  */
 async function ompRun(arm: Arm, prompt: string, sessions = false) {
   const persistence = sessions ? ["--session-dir", SESSION_DIR] : ["--no-session"];
+  const preload = arm === "atl-pre" ? ["--append-system-prompt", join(armDir(arm), PRELOAD_FILE)] : [];
   return run(
-    ["omp", "-p", "--mode", "json", ...persistence, "--no-title", "--max-time", MAX_TIME, prompt],
+    ["omp", "-p", "--mode", "json", ...persistence, ...preload, "--no-title", "--max-time", MAX_TIME, prompt],
     { cwd: armDir(arm), env: await armEnv(arm), timeoutMs: 11 * 60_000 },
   );
 }
@@ -277,6 +286,9 @@ async function runOne(
   const dir = join(RUNS, tag === undefined ? arm : `${arm}-${tag}`);
   mkdirSync(dir, { recursive: true });
   const stem = join(dir, `${scenario.id}-${rep}`);
+  if (scenario.write) {
+    await scenario.prepare?.();
+  }
   const target = scenario.write ? (scenario.pickTarget?.() ?? (await pickTarget())) : undefined;
   const prompt = scenario.prompt(arm, target);
   const startedAt = new Date().toISOString();
@@ -322,8 +334,9 @@ async function runOne(
 }
 
 /**
- * Re-apply the current answer checks to saved final texts in every runs/ dir. The write scenario
- * re-reads the live issue for its saved target (state persists, so this is the same read-back).
+ * Re-apply the current answer checks to saved final texts in every runs/ dir. Write scenarios re-read the live site
+ * for their saved target (markers persist, so this is the same read-back), except scenarios with `prepare`: they share
+ * one target that every live run resets, so a later read-back would credit an old run with a newer run's transition.
  */
 async function rejudge(): Promise<void> {
   const scenarios = [...buildScenarios(loadManifest()), ...buildNightmareScenarios()];
@@ -336,12 +349,12 @@ async function rejudge(): Promise<void> {
         !isRecord(saved) ||
         typeof saved.scenario !== "string" ||
         typeof saved.finalText !== "string" ||
-        (saved.arm !== "atl" && saved.arm !== "mcp")
+        !isArm(saved.arm)
       ) {
         continue;
       }
       const scenario = scenarios.find((item) => item.id === saved.scenario);
-      if (scenario === undefined || (!scenario.write && saved.finalText === "")) {
+      if (scenario === undefined || scenario.prepare !== undefined || (!scenario.write && saved.finalText === "")) {
         continue;
       }
       const target = typeof saved.target === "string" ? saved.target : undefined;
@@ -405,7 +418,7 @@ async function main(): Promise<void> {
   }
   if (Bun.argv[2] !== "run") {
     throw new Error(
-      "usage: bun eval/run.ts probe | rejudge | list [--set macro|nightmare] | run [--set macro|nightmare] [--rep N] [--arms atl,mcp] [--scenarios id,id] [--tag label] [--sessions]",
+      "usage: bun eval/run.ts probe | rejudge | list [--set macro|nightmare] | run [--set macro|nightmare] [--rep N] [--arms atl,atl-pre,mcp] [--scenarios id,id] [--tag label] [--sessions]",
     );
   }
   const sessions = Bun.argv.includes("--sessions");
@@ -417,7 +430,7 @@ async function main(): Promise<void> {
   const given = flag("tag");
   // Nightmare runs always carry a tag, so report.ts (untagged runs = the s1-s8 totals) never mixes them in.
   const tag = set === "nightmare" ? (given === undefined ? NIGHTMARE_TAG : `${NIGHTMARE_TAG}-${given}`) : given;
-  const arms = (flag("arms") ?? ARMS.join(",")).split(",").flatMap((name) => ARMS.filter((arm) => arm === name));
+  const arms = (flag("arms") ?? DEFAULT_ARMS.join(",")).split(",").flatMap((name) => ARMS.filter((arm) => arm === name));
   const wanted = flag("scenarios")?.split(",");
   const available = scenarioSet(set);
   const unknown = wanted?.filter((id) => !available.some((scenario) => scenario.id === id)) ?? [];

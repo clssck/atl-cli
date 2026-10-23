@@ -50,8 +50,9 @@ export function chaosJiraScenarios(): Scenario[] {
   const claimed = (tag: string): Matcher =>
     rx(new RegExp(`(?:${mention(tag)})[^\\n]{0,80}?(?:deliver|ship|releas|launch|live|complete|\\bdone\\b|finish|kész)|(?:deliver|ship|releas|launch|complete|\\bdone\\b|finish|kész)[^\\n]{0,80}?(?:${mention(tag)})`, "i"));
   const deliveredLabel = "deliver(?:ed|y)?|shipped|released|completed|actually (?:done|built)|built and shipped|finished|live";
-  const threeWords = rx(new RegExp(`\\bthree\\b[^\\n]{0,40}(?:${deliveredLabel})|(?:${deliveredLabel})[^\\n]{0,40}\\bthree\\b`, "i"));
-  const countThree = (text: string): boolean => countMatcher(deliveredLabel, 3)(text) || threeWords(text);
+  const threeWords = rx(new RegExp(`\\bthree\\b[^\\n]{0,80}(?:${deliveredLabel})|(?:${deliveredLabel})[^\\n]{0,40}\\bthree\\b`, "i"));
+  const threeDigit = rx(new RegExp(`(?<![\\d.\\-])3(?!\\d)[^\\n\\d]{0,60}(?:${deliveredLabel})`, "i"));
+  const countThree = (text: string): boolean => countMatcher(deliveredLabel, 3)(text) || threeWords(text) || threeDigit(text);
 
   const TOTAL = /\b(?:total|in all|altogether|overall|combined|sum)\b/i;
 
@@ -94,7 +95,7 @@ export function chaosJiraScenarios(): Scenario[] {
           answer: (text: string): boolean => !text.split(SENTENCE).some((sentence) => claimed(tag)(sentence) && !NOT_BUILT.test(sentence) && !HEDGE.test(sentence)),
         })),
       ],
-      new RegExp(`${NOT_BUILT.source}|\\bstatus\\b|overstat\\w*`, NOT_BUILT.flags),
+      new RegExp(`${NOT_BUILT.source}|\\bstatus\\b|overstat\\w*|\\bwould\\b|\\bplain\\b|\\bfilter\\b`, NOT_BUILT.flags),
     ),
     read(
       "n24-reopened-regression",
@@ -116,7 +117,7 @@ export function chaosJiraScenarios(): Scenario[] {
         },
         { label: "currently in progress", answer: rx(/in\s+progress|folyamatban|being\s+worked|work\s+(?:has\s+)?resum|back\s+in\s+(?:development|progress)/i) },
       ],
-      HISTORY,
+      new RegExp(`${HISTORY.source}|["“]|\\buntil\\b|\\bbefore\\b|\\bonce\\b|partial|came back|went out`, HISTORY.flags),
     ),
     read(
       "n25-contradicting-sources",

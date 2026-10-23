@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isRecord } from "../../src/core/guards.ts";
-import { OUT } from "../lib.ts";
+import { atl, OUT } from "../lib.ts";
 import { type Check, escapeRegExp, type Scenario, verdict } from "../scenarios.ts";
 
 export const NIGHTMARE = join(OUT, "nightmare");
@@ -309,7 +309,13 @@ export function statusCount(status: string, count: number): Matcher {
   if (alias === undefined) {
     throw new Error(`no English alias for status ${status}`);
   }
-  return nearMatcher(`${escapeRegExp(status)}|${alias}`, count);
+  const label = `${escapeRegExp(status)}|${alias}`;
+  const near = nearMatcher(label, count);
+  const row = new RegExp(`(?:${label})`, "i");
+  // A breakdown row ("| Folyamatban | 1 | 3 | **4** |") states the status total as the row's last number.
+  return (text) =>
+    near(text) ||
+    text.split("\n").some((line) => row.test(line) && line.includes("|") && Number(line.match(/\d+/g)?.at(-1)) === count);
 }
 
 export function statusCounts(answer: string): [string, number][] {
@@ -335,4 +341,108 @@ export function writeMarker(token: string): string {
 
 export function read(id: string, name: string, prompt: string, expectations: Expectation[], excuse?: RegExp): Scenario {
   return { id, name, write: false, prompt: () => prompt, check: (text) => judge(text, expectations, excuse) };
+}
+
+/** One answer slot of a strict scenario: the value on its `ANSWER <name>:` line must match `answer` and no decoy. */
+export interface Slot {
+  /** Slot name as it appears on the line, e.g. "priority" or "open items". */
+  name: string;
+  /** What the agent should put on the line, shown in the prompt, e.g. "the priority name". */
+  hint: string;
+  answer: Matcher;
+  decoys?: Decoy[];
+}
+
+/** Prompt suffix asking for one `ANSWER <slot>: <value>` line per slot. */
+export function answerFormat(slots: readonly Slot[]): string {
+  const lines = slots.map((slot) => `ANSWER ${slot.name}: <${slot.hint}>`).join("\n");
+  return `\n\nEnd your reply with exactly these lines, one value per line:\n${lines}`;
+}
+
+/** Value on the last `ANSWER <name>:` line (markdown emphasis and backticks around it are ignored). */
+export function slotValue(text: string, name: string): string | undefined {
+  const pattern = new RegExp(`^[\\s>*_\`-]*ANSWER\\s+${escapeRegExp(name)}[*_\`]*\\s*:[\\s*_\`]*(.*?)[\\s*_\`.]*$`, "gim");
+  const values = [...text.matchAll(pattern)].map((match) => match[1] ?? "");
+  return values.at(-1);
+}
+
+/**
+ * Strict judging: only the `ANSWER` lines count, so explanations may mention every decoy freely, and a line that
+ * hedges between the answer and a decoy fails.
+ */
+export function judgeSlots(raw: string, slots: readonly Slot[]): Check {
+  const text = normalise(raw);
+  const details: Record<string, boolean> = {};
+  const seen: string[] = [];
+  for (const slot of slots) {
+    const value = slotValue(text, slot.name);
+    seen.push(`${slot.name} = ${value === undefined ? "(no ANSWER line)" : JSON.stringify(value)}`);
+    details[`ANSWER ${slot.name}`] = value !== undefined && slot.answer(value);
+    for (const decoy of slot.decoys ?? []) {
+      details[`ANSWER ${slot.name}: not ${decoy.name}`] = value === undefined || !decoy.match(value);
+    }
+  }
+  const check = verdict(details);
+  return { success: check.success, details: [...check.details, ...seen] };
+}
+
+export function strictRead(id: string, name: string, prompt: string, slots: readonly Slot[]): Scenario {
+  return { id, name, write: false, prompt: () => `${prompt}${answerFormat(slots)}`, check: (text) => judgeSlots(text, slots) };
+}
+
+// ---------------------------------------------------------------------------
+// Write-scenario read-back
+
+/** Parses Jira's "2026-10-23T10:56:09+0200" (no colon in the offset). */
+export function jiraTime(at: string): number {
+  return Date.parse(at.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+}
+
+/** Run start time encoded by a write token (`Date.now().toString(36)`), minus a little clock slack. */
+export function runStart(token: string): number {
+  const millis = Number.parseInt(token, 36);
+  if (Number.isNaN(millis)) {
+    throw new Error(`write scenario token ${token} is not a base-36 timestamp`);
+  }
+  return millis - 2000;
+}
+
+export async function issueStatus(key: string): Promise<string> {
+  const parsed: unknown = JSON.parse((await atl("issue", "get", key)).stdout);
+  return isRecord(parsed) && typeof parsed.status === "string" ? parsed.status : "?";
+}
+
+export interface StatusChange {
+  from: string;
+  to: string;
+}
+
+/** Status changes of `key` made at or after `since` (epoch ms), oldest first. */
+export async function statusChangesSince(key: string, since: number): Promise<StatusChange[]> {
+  const parsed: unknown = JSON.parse((await atl("issue", "changelog", key, "--all")).stdout);
+  const entries = isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items : [];
+  return entries.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.at !== "string" || jiraTime(entry.at) < since || !Array.isArray(entry.changes)) {
+      return [];
+    }
+    return entry.changes.flatMap((change) =>
+      isRecord(change) && change.field === "status"
+        ? [{ from: typeof change.from === "string" ? change.from : "", to: typeof change.to === "string" ? change.to : "" }]
+        : [],
+    );
+  });
+}
+
+/**
+ * A write scenario's `prepare`: moves `key` back to its seeded `status` before a live run, so the run has to make the
+ * transition itself. Checks judge the transition from the changelog since the run started, never from the current
+ * status alone.
+ */
+export async function restoreStatus(key: string, status: string): Promise<void> {
+  if ((await issueStatus(key)) !== status) {
+    const moved = await atl("issue", "move", key, status);
+    if (moved.code !== 0) {
+      throw new Error(`could not restore ${key} to ${status}: ${moved.stdout.trim().slice(0, 300)}`);
+    }
+  }
 }

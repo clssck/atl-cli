@@ -114,7 +114,7 @@ export function chaosConfluenceScenarios(): Scenario[] {
         },
         { label: `grace ${grace}s`, answer: rx(new RegExp(`(?<![\\d.])${grace}\\s*(?:s|secs?|seconds)(?![\\p{L}])`, "iu")) },
       ],
-      /deprecated|obsolete|legacy|do not|don't|avoid|warn/i,
+      /deprecated|obsolete|legacy|do not|don't|avoid|warn|forbidden|called out|never/i,
     ),
     read(
       "n28-renamed-page",

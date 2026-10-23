@@ -12,13 +12,12 @@ import { isRecord } from "../src/core/guards.ts";
 import { OUT } from "./lib.ts";
 import { type MicroRow, renderMicroTable } from "./micro.ts";
 import { type RunMetrics, SESSION_REP, type ToolCallRecord } from "./run.ts";
-
-const ARMS = ["atl", "mcp"] as const;
+import { ARMS, isArm } from "./scenarios.ts";
 
 function isRunMetrics(value: unknown): value is RunMetrics {
   return (
     isRecord(value) &&
-    (value.arm === "atl" || value.arm === "mcp") &&
+    isArm(value.arm) &&
     typeof value.scenario === "string" &&
     Array.isArray(value.toolCalls) &&
     isRecord(value.usage)

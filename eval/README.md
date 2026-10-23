@@ -8,9 +8,11 @@ Token and agent-friendliness eval of `atl` against the Atlassian Remote MCP (v1)
 | `lib.ts` | shared plumbing: binary path, subprocess runner, `omp toks` counts, MCP session, manifest loader |
 | `micro.ts` | one call each: 15 atl command / MCP tool pairs; bytes, Claude tokens, info-parity check |
 | `scenarios.ts` | eight natural-language scenarios (s1-s8) with answer checks from the manifest |
-| `nightmare/scenarios.ts` | twenty-nine scenarios (n01-n29) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence,chaos-jira,chaos-confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
-| `nightmare/checks.ts` | shared answer checks: manifest readers, matchers, decoy judging |
+| `nightmare/scenarios.ts` | forty-two scenarios (n01-n42) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence,chaos-jira,chaos-confluence,chaos-multi,hell-history,hell-ledger,hell-confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/checks.ts` | shared answer checks: manifest readers, matchers, decoy judging, strict `ANSWER <slot>:` line judging |
 | `nightmare/chaos-{jira,confluence}.ts` | n22-n29 (moved issue, abandoned vs delivered, reopened regression, contradicting sources; excerpt-include, expand + deprecated, renamed page, Jira macro vs stale count) |
+| `nightmare/chaos-multi.ts` | n30-n33: multi-hop (postmortem → bug → linked fix → release calendar; owners table × open-issue counts) and writes with traps (comment on the current runbook, not its "(OLD)" twin; transition the real issue, not its `[DUPLICATE]`) |
+| `nightmare/hell-{history,ledger,confluence}.ts` | n34-n42, the strict set: priority at the second entry into In Progress buried in ~140 changelog entries; worklogs by New York date across the EU DST switch, sub-task included; review transition plus a dated worklog (write); a sum over >100 issues with corrected amounts and boundary due dates; duplicate-link direction against stale descriptions; ADF date nodes in an expand; a prompt-injection banner against the approved table; a homoglyph twin of a linked page with rowspan cells; unticked tasks under a stale "all complete" line. Only the `ANSWER <slot>:` lines the prompt asks for are judged |
 | `nightmare/seed-scrum.ts` | read-only verifier of the Scrum project NMS and the second space NMCORP; writes `.out/nightmare/scrum.json` |
 | `run.ts` | macro eval: headless `omp -p` agents per arm and scenario; metrics per run |
 | `report.ts` | builds `.out/report.md` from `micro.json` and the run metrics |
@@ -48,6 +50,10 @@ bun eval/nightmare/seed-scrum.ts         # read-only check of project NMS and sp
 ```bash
 bun eval/nightmare/seed-chaos-jira.ts         # 11 NMS issues prefixed "atl smoke nm chaos"; manifest .out/nightmare/chaos-jira.json
 bun eval/nightmare/seed-chaos-confluence.ts   # chaos pages under "atl smoke nm chaos Root"; manifest .out/nightmare/chaos-confluence.json
+bun eval/nightmare/seed-chaos-multi.ts        # NMS-57..72 + 5 pages for n30-n33; manifest .out/nightmare/chaos-multi.json
+bun eval/nightmare/seed-hell-history.ts       # n34-n36: changelog, DST worklogs, review target; manifest .out/nightmare/hell-history.json
+bun eval/nightmare/seed-hell-ledger.ts        # n37, n38, n42: ~150 ledger issues, duplicate set, ADF dates; manifest .out/nightmare/hell-ledger.json
+bun eval/nightmare/seed-hell-confluence.ts    # n39-n41 pages under "atl smoke nm hell"; manifest .out/nightmare/hell-confluence.json
 ```
 
 The chaos seeders are idempotent and verify by reading back. n29's answer is the live result of the readiness page's JQL (open NMS issues on fixVersion 1.1): re-run `seed-chaos-confluence.ts` after changing those issues.
@@ -68,7 +74,7 @@ bun eval/run.ts run --rep 1                 # all scenarios, both arms, sequenti
 bun eval/run.ts run --rep 1 --arms atl --tag r2   # round 2: files go to runs/atl-r2/ (rebuild the binary first)
 bun eval/run.ts run --rep 2 --scenarios s3-rollback-window --arms atl
 bun eval/run.ts run --rep 11 --sessions --scenarios s4-handbook-retention,s6-epic-children
-bun eval/run.ts rejudge                     # re-apply the current answer checks (both sets) to saved final texts
+bun eval/run.ts rejudge                     # re-apply the current answer checks (both sets) to saved final texts; skips n33/n36 (shared target reset per live run)
 bun eval/run.ts list --set nightmare        # scenario ids without a model call
 bun eval/run.ts run --set nightmare --arms atl,mcp --rep 1 --scenarios n01-chain-root   # corporate-nightmare set
 ```
@@ -76,6 +82,7 @@ bun eval/run.ts run --set nightmare --arms atl,mcp --rep 1 --scenarios n01-chain
 Arms live in `/tmp/atl-eval/arms/<arm>`:
 
 - `atl`: the repo's `skills/atl/SKILL.md` as a project skill, `atl` on PATH, the Atlassian MCP server disabled.
+- `atl-pre`: same binary, PATH and tool surface as `atl`, but the skill text is appended to the system prompt (`omp --append-system-prompt <arm>/skill-preload.md`) and no skill file exists in the arm, so the agent gets the instructions without spending a tool call to read them (the analogue of MCP tool schemas living in context). Opt-in: `--arms atl-pre`; a default run uses `atl,mcp`. Run dirs are `runs/atl-pre[-tag]/` and `runs/atl-pre-nm[-tag]/`.
 - `mcp`: the MCP v1 server configured with the bearer, no `atl` on PATH.
 
 Each run writes `.out/runs/<arm>/<scenario>-<rep>.{jsonl,stderr.txt,metrics.json}`. Existing metrics files are skipped, so an interrupted batch resumes. The write scenario (s8) picks an unused issue still in status Teendő per run, comments `atl smoke eval: budget confirmed (<arm>)`, moves it to Ellenőrzés alatt, and the check reads the issue back with atl. It changes the site; used targets are recorded in the metrics files.
