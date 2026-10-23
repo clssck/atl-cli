@@ -55,7 +55,7 @@ const N09_EXCUSE = /\b(?:body|text|page says|says)\b/i;
 
 /** n11: a decoy extension quoted while describing one of the other near-duplicate pages (list lines name its parent or space; a table row lists one lookalike). */
 export const N11_EXCUSE =
-  /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner|^\s*\|/i;
+  /\b(?:security|finance|pénzügy|hr|systems|ir runbooks|it support|other|others|elsewhere|from|updated|second|another|engineering|mérnökség)\b|\bno\s+`?nm-owner|^\s*\|/i;
 
 /** n13: the old parent named as history ("created under HR"). */
 const N13_EXCUSE = /\b(?:created|used to|was|moved|from|hr)\b/i;
@@ -545,7 +545,7 @@ export function buildNightmareScenarios(): Scenario[] {
               : [],
         })),
       ],
-      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?|point(?:s|ing)?\s+to|linked)\b|\bbacklog\s+(?:has|holds|contains)\b/i,
+      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?|point(?:s|ing)?\s+to|link(?:s|ed)?)\b|\bbacklog\s+(?:has|holds|contains)\b/i,
     ),
     read(
       "n20-corp-expense",

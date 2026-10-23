@@ -289,7 +289,8 @@ export function daysMatcher(value: number): Matcher {
  * "Thursdays (Corp); ..." (the reverse order stops at a ';' or table pipe).
  */
 export function roleDayMatcher(role: string, other: string, day: string): Matcher {
-  const forward = `${role}(?:(?!${other}|not\\b)[^\\n.]){0,60}?(?:${day})`;
+  // May cross a sentence end ("The Engineering process differs. Its releases ship on Tuesdays"), never the other role.
+  const forward = `${role}(?:(?!${other}|not\\b)[^\\n]){0,80}?(?:${day})`;
   const reverse = `(?:${day})[^\\n.;|]{0,30}?${role}`;
   return rx(new RegExp(`${forward}|${reverse}`, "i"));
 }

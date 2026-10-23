@@ -16,7 +16,9 @@ Headless agents answer the same natural-language questions against seeded data o
 - `atl-pre`: the same, with the skill preloaded in the system prompt.
 - `mcp`: the Atlassian Remote MCP **v1** endpoint.
 
-All three sets below come from one run (tag `r4`) of the current build and skill. Means are per question.
+All three sets below come from one run (tag `r4`, product as of commit c8aea8e). Means are per question.
+
+A later run of the two atl arms (tag `r5`, all 47 questions × 3) added these changes: `--grep` accepts `(?i)` and `-i`, `--all` is ignored where nothing pages, `issue links` includes web links, and `issue worklogs` gained `--since/--until/--tz` with totals. Across all 141 runs per arm, atl-pre went from 2.56 to 2.17 calls per question and from $0.053 to $0.050, with tool errors down from 31 to 11. atl went from 3.52 to 3.06 calls and from $0.064 to $0.056, with errors down from 32 to 4. On the abyss set, atl-pre went from 4.27 to 2.53 calls and from $0.078 to $0.057. Accuracy was unchanged at 141/141 for atl-pre. atl was correct in every run, but the checker failed one correct n11 answer: a lookalike page's extension sat in a list fragment.
 
 **Corporate-nightmare set, n01-n33** (99 runs per arm, writes included):
 
