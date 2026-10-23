@@ -22,7 +22,8 @@ concurrency:
 
 jobs:
   platform:
-    name: ${{ matrix.os }} / Bun ${{ matrix.bun }}
+    # The check name is the ruleset's required status check on main: keep it free of the Bun version.
+    name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -33,7 +34,7 @@ jobs:
         os: ${{ fromJSON((github.event_name == 'push' || github.event_name == 'pull_request') && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
         # The supported Bun (package.json engines).
         bun:
-          - 1.4.3
+          - 1.4.4
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

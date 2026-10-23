@@ -20,7 +20,7 @@ body:
       label: Environment
       description: Bun version (`bun --version`) and OS.
       placeholder: |
-        Bun: 1.4.3
+        Bun: 1.4.4
         OS: Windows 11, macOS 15, or Linux distribution/version
     validations:
       required: true
