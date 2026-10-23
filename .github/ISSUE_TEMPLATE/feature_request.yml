@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that is hard or impossible with atl today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed command or flags
+      description: What command, flag, or output shape would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: Jira / Confluence API involved
+      description: The REST or GraphQL endpoint(s) or MCP tool this would use, with links to the Atlassian docs if known.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Examples, links, etc. Redact any secrets and tenant data.
+    validations:
+      required: false

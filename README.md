@@ -151,7 +151,7 @@ agent contract
 
 ### Agent skill
 
-[skills/atl/SKILL.md](skills/atl/SKILL.md) is a compact command table for agents (under 700 tokens): search, issue, board, page and write commands with the flags agents would otherwise look up through `--help`, plus a few output and error rules. For omp, link it into a skills root, e.g. `ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`, with the `atl` binary on `PATH`.
+[skills/atl/SKILL.md](skills/atl/SKILL.md) is a compact command table for agents (about 1.9 KB): search, issue, board, page and write commands with the flags agents would otherwise look up through `--help`, plus a few output and error rules. For omp, link it into a skills root, e.g. `ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`, with the `atl` binary on `PATH`.
 
 ### Writes
 
@@ -214,14 +214,14 @@ Markdown: `<u>`, `<sub>` and `<sup>` read and write underline, subscript and sup
 | `ATL_SITE` | default site host |
 | `ATL_ACCESS_TOKEN` | bearer token override |
 | `ATL_TIMEOUT_MS` | HTTP timeout (default 30000) |
-| `ATL_PRETTY` | `1` indents JSON |
+| `ATL_PRETTY` | `1` or `true` indents JSON |
 | `ATL_MCP_URL` | MCP endpoint for passthrough commands (default `https://mcp.atlassian.com/v1/mcp/authv2`) |
 
 ## Develop
 
 ```bash
 bun install --frozen-lockfile
-bun run check    # tsc, type-aware oxlint (warnings denied), oxfmt --check, bun test
+bun run check    # tsc, type-aware oxlint (warnings denied), oxfmt --check, verify (plugin version, changelog), bun test
 bun run fmt
 ```
 
@@ -238,6 +238,10 @@ Repository flow, conventions and the MCP upgrade procedure are in [AGENTS.md](AG
   2. With `ATL_CONFIG_DIR=$D ATL_MCP_URL=https://mcp.atlassian.com/v2/mcp`, run `mcp tools --snapshot --pretty --output mcp/tools-v2.json` and `mcp tools --catalog --pretty --output mcp/operations-v2.json`.
   3. `bun test test/parity.test.ts`; map every new name to a command or add a `mcp/gaps-v2.json` entry with probe evidence.
   4. `rm -rf "$D"`, then `bun scripts/mcp-watch.ts --write`.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and checks, [SECURITY.md](SECURITY.md) for private vulnerability reporting, and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

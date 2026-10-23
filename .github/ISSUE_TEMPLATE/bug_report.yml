@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a problem with the atl CLI
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **Redact any secrets** before posting: never paste tokens, `credentials.json`, or tenant data. Replace private site names, cloud ids, page ids and issue keys with placeholders.
+  - type: input
+    id: version
+    attributes:
+      label: atl version
+      description: Output of `atl --version`.
+      placeholder: "atl 0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Bun version (`bun --version`) and OS.
+      placeholder: |
+        Bun: 1.4.3
+        OS: Windows 11, macOS 15, or Linux distribution/version
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command
+      description: The exact `atl` command(s) you ran. Redact secrets and private identifiers.
+      render: shell
+      placeholder: atl page get 123456 --grep "release"
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output
+      description: The JSON error from stderr and the exit code, if any. Redact site names and ids if private.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

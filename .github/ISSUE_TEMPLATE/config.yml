@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Atlassian Cloud REST API documentation
+    url: https://developer.atlassian.com/cloud/
+    about: Reference for the Jira, Confluence and Teamwork Graph APIs atl wraps.
+  - name: Report a security vulnerability
+    url: https://github.com/clssck/atl-cli/security/advisories/new
+    about: Please report security issues privately here, not as public issues.

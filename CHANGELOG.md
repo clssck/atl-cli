@@ -16,6 +16,7 @@
 - npm package `atl-cli` (bin `atl`): a Bun-targeted bundle `dist/atl.js` built by `bun run build`, shipped with the agent skill, `plugin.json` and `LICENSE`.
 - Node-compatible launcher `bin/atl.js` that re-executes under Bun >= 1.4.3 with `--no-env-file` (a stray `.env` cannot redirect settings or tokens) and reports a JSON error when Bun is missing or too old.
 - Native binary scripts renamed to `compile`, `compile:linux`, `compile:windows`.
+- Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (private vulnerability reporting), issue forms, a pull request template, `.gitattributes` (LF line endings) and a `.gitleaks.toml` config.
 - Release workflow: manual patch/minor/major dispatch prepares one candidate, smoke-tests it on Linux, macOS and Windows, publishes to npm with provenance via trusted publishing, pushes the version commit and tag atomically, and creates the GitHub Release.
 - CI runs build, tests and an installed-package smoke (`bun run test:platform`); `bun run verify` checks `plugin.json` and changelog versions.
 - MIT license.
