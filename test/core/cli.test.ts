@@ -6,12 +6,16 @@ import { bodyLines } from "../../src/commands/common.ts";
 import { Type } from "../../src/core/schema.ts";
 import {
   CommandRegistry,
+  GLOBAL_FLAGS,
+  allCommands,
   defineCommand,
+  describeFlags,
   parseArgv,
   runCli,
   type CommandInput,
   type Invocation,
 } from "../../src/core/cli.ts";
+import "../../src/commands/index.ts";
 import { AtlError } from "../../src/core/errors.ts";
 
 const sample = defineCommand({
@@ -174,6 +178,47 @@ const ownFields = defineCommand({
     return Promise.resolve({ got: input.flags.fields, other: 1 });
   },
 });
+
+function stub(name: string) {
+  return defineCommand({
+    name,
+    summary: name,
+    args: [],
+    flags: Type.Object({ grep: Type.Optional(Type.String()) }),
+    sideEffects: "none",
+    examples: [],
+    run: () => Promise.resolve({}),
+  });
+}
+
+/** Several groups sharing verbs, like the real registry's `page`/`space`/`issue`/`comment`. */
+function navRegistry(): CommandRegistry {
+  const nav = new CommandRegistry();
+  nav.register(
+    [
+      "comment.list",
+      "issue.comment",
+      "issue.get",
+      "issue.link",
+      "page.get",
+      "space.list",
+      "thing.get",
+    ].map(stub),
+  );
+  return nav;
+}
+
+function navError(argv: string[]): AtlError {
+  try {
+    parseArgv(argv, navRegistry(), {});
+  } catch (error) {
+    if (error instanceof AtlError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected parse to throw");
+}
 
 function makeRegistry(): CommandRegistry {
   const registry = new CommandRegistry();
@@ -338,6 +383,30 @@ describe("parseArgv positionals and commands", () => {
     expect(parseError(["thng", "get", "status"]).hint).toBe('Did you mean "atl thing get"?');
   });
 
+  test("a typed suffix that is a registry command is suggested", () => {
+    // Not `issue comment`, the nearest spelling of `page comment`.
+    expect(navError(["page", "comment", "list", "1"]).hint).toBe(
+      'Did you mean "atl comment list"?',
+    );
+    expect(navError(["nope", "thing", "get"]).hint).toBe('Did you mean "atl thing get"?');
+  });
+
+  test("a typed group is never swapped for another group's command", () => {
+    const issue = navError(["issue", "list"]);
+    expect(issue.hint).not.toContain("Did you mean");
+    expect(issue.hint).toContain("comment, get, link");
+    const page = navError(["page", "list"]);
+    expect(page.hint).not.toContain("Did you mean");
+    expect(page.hint).toContain('Commands in "page": get');
+  });
+
+  test("--grep -i is an input error that says --grep is case-insensitive", () => {
+    const error = navError(["thing", "get", "--grep", "-i", "needle"]);
+    expect(error.code).toBe("invalid_flag_value");
+    expect(error.category).toBe("input");
+    expect(error.hint).toContain("already matches case-insensitively");
+  });
+
   test("single-word command and group-only invocation", () => {
     expect(parseRun(["echo"]).command.name).toBe("echo");
     const group = parseArgv(["thing"], makeRegistry(), {});
@@ -346,6 +415,19 @@ describe("parseArgv positionals and commands", () => {
 });
 
 describe("global flags", () => {
+  test("command flags shadow a global flag only where allowlisted", () => {
+    // `--version` is excluded: commands owning it (`page get --version 3`) is the documented design.
+    const globals = new Set(
+      GLOBAL_FLAGS.map((def) => def.name).filter((name) => name !== "version"),
+    );
+    const shadows = allCommands().flatMap((spec) =>
+      describeFlags(spec.flags)
+        .filter((info) => globals.has(info.flag))
+        .map((info) => `${spec.name}:${info.flag}`),
+    );
+    expect(shadows.toSorted()).toEqual(["commands.run:fields", "issue.attachment.download:output"]);
+  });
+
   test("parse before and after command words", () => {
     const before = parseRun(["--site", "acme", "--plan", "echo"]);
     expect(before.globals).toMatchObject({ site: "acme", plan: true });

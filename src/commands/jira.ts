@@ -62,8 +62,9 @@ export const DEFAULT_ISSUE_FIELDS = [
 ];
 
 /**
- * Field ids sent to the API as typed (and, for writes, as typed in `--set`): custom ids and the
- * system fields. Any other word is looked up as a field name through `resolveField`.
+ * Field ids sent to the API as typed: custom ids and the system fields. Any other word is looked
+ * up as a field name through `resolveField`. Writes (`--set`) send the value as written except
+ * where the writer shapes it: priority text becomes `{id}`, labels text becomes an array.
  */
 export const DIRECT_FIELD =
   /^(?:customfield_\d+|summary|description|environment|status|statuscategory|statuscategorychangedate|issuetype|priority|assignee|reporter|creator|labels|components|fixVersions|versions|duedate|parent|project|resolution|resolutiondate|created|updated|lastViewed|comment|worklog|attachment|subtasks|issuelinks|security|timetracking|timeoriginalestimate|timeestimate|timespent|aggregatetimeoriginalestimate|aggregatetimeestimate|aggregatetimespent|aggregateprogress|progress|votes|watches|workratio|issuekey)$/;
@@ -198,22 +199,29 @@ function body(
 }
 
 /**
- * Compact comment: author as display name; `updated` when it differs from `created` by a visible
- * second, else `edited: true` when Jira's millisecond timestamps still differ (an edit seconds
- * after posting must not look untouched).
+ * A comment's `created`, plus `updated` when it differs from `created` by a visible second, else
+ * `edited: true` when Jira's millisecond timestamps still differ (an edit seconds after posting
+ * must not look untouched).
  */
-export function compactComment(comment: JiraComment, format: AdfFormat | undefined) {
+function commentTimes(comment: JiraComment) {
   const created = shortTs(comment.created);
   const updated = shortTs(comment.updated);
   return {
-    id: comment.id,
-    author: userName(comment.author),
     created,
     updated: updated === created ? undefined : updated,
     edited:
       updated === created && comment.updated !== undefined && comment.updated !== comment.created
         ? true
         : undefined,
+  };
+}
+
+/** Compact comment: author as display name, timestamps as `commentTimes` gives them. */
+export function compactComment(comment: JiraComment, format: AdfFormat | undefined) {
+  return {
+    id: comment.id,
+    author: userName(comment.author),
+    ...commentTimes(comment),
     body: body(comment.body, format),
   };
 }
@@ -221,8 +229,18 @@ export function compactComment(comment: JiraComment, format: AdfFormat | undefin
 const COMPACT_FIELD_KEYS: ReadonlySet<string> = new Set([...DEFAULT_ISSUE_FIELDS, "issuelinks"]);
 const COMPACT_ISSUE_KEYS: ReadonlySet<string> = new Set(["id", "key", "fields", "self", "expand"]);
 
-/** API fields a `jql` list item asks for by default; `--issue-fields` replaces this list. */
-const LIST_ISSUE_FIELDS = ["summary", "status", "issuetype", "priority", "assignee", "updated"];
+/** API fields a `jql` or `board issues` list item asks for by default; `--issue-fields` replaces this list. */
+export const LIST_ISSUE_FIELDS = [
+  "summary",
+  "status",
+  "issuetype",
+  "priority",
+  "assignee",
+  "updated",
+];
+
+/** API fields an `issue tree` item asks for by default (plus `parent`); `--issue-fields` replaces this list. */
+const TREE_ISSUE_FIELDS = ["summary", "status", "issuetype"];
 
 /** Display label of a Jira value object: user, named entity (component, version, status), option, or issue reference. */
 function recordLabel(value: Record<string, unknown>): string | undefined {
@@ -385,7 +403,7 @@ async function resolveRequested(
 }
 
 /** `--issue-fields` for a list: the requested fields (ids or names), else `fallback`. */
-async function requestedFields(
+export async function requestedFields(
   session: Session,
   raw: string | undefined,
   fallback: readonly string[],
@@ -440,7 +458,7 @@ async function defaultExtraFields(session: Session): Promise<Map<string, string>
   return names;
 }
 
-const ISSUE_FIELDS_FLAG = Type.Optional(
+export const ISSUE_FIELDS_FLAG = Type.Optional(
   Type.String({
     description: "Comma-separated Jira field ids or names to request (API `fields`)",
   }),
@@ -488,10 +506,44 @@ function markdownRows(doc: AdfDoc | null | undefined): string[] {
   return markdown === "" ? [] : markdown.split("\n");
 }
 
+const GREP_CONTEXT_FLAG = Type.Optional(
+  Type.Integer({
+    minimum: 0,
+    maximum: 50,
+    description: "With --grep: lines of context around each match; overlapping ranges merge",
+  }),
+);
+
 /**
- * `issue get --grep`: the issue header plus only the matching ranges of its description and
+ * The `--grep` matcher, after the usage checks: `--context` needs `--grep`, and `--grep` searches
+ * markdown lines, so it cannot be combined with `--full` or `--format adf`.
+ */
+function grepMatcher(
+  full: boolean,
+  flags: {
+    grep?: string | undefined;
+    context?: number | undefined;
+    format?: AdfFormat | undefined;
+  },
+): RegExp | undefined {
+  if (flags.context !== undefined && flags.grep === undefined) {
+    throw inputError("invalid_flag_combination", "--context needs --grep", "Add --grep <regex>");
+  }
+  if (flags.grep !== undefined && (full || flags.format === "adf")) {
+    throw inputError(
+      "invalid_flag_combination",
+      `--grep searches text lines and cannot be combined with ${full ? "--full" : "--format adf"}`,
+      "Use the default markdown format",
+    );
+  }
+  return flags.grep === undefined ? undefined : grepPattern(flags.grep);
+}
+
+/**
+ * `--grep` over an issue: the header plus only the matching ranges of its description and
  * comments. `matches` counts every range found; at most `GREP_RANGE_CAP` are shown, description
- * first, and `moreMatches` counts the rest. A comment is tagged with id, author and created.
+ * first, and `moreMatches` counts the rest. A comment is tagged with id, author and its
+ * `commentTimes`; `numbered` adds `index`, its 1-based position in `comments`.
  */
 function grepIssue(
   header: Record<string, unknown>,
@@ -499,12 +551,14 @@ function grepIssue(
   comments: readonly JiraComment[],
   matcher: RegExp,
   context: number,
+  numbered = false,
 ) {
   const descriptionRows = markdownRows(description);
   const descriptionRanges = grepRanges(descriptionRows, matcher, context, true);
   const commentHits = comments
-    .map((comment) => ({
+    .map((comment, i) => ({
       comment,
+      index: numbered ? i + 1 : undefined,
       ranges: grepRanges(markdownRows(comment.body), matcher, context, true),
     }))
     .filter(({ ranges }) => ranges.length > 0);
@@ -518,12 +572,18 @@ function grepIssue(
   };
   const shownDescription = take(descriptionRanges);
   const shownComments = commentHits
-    .map(({ comment, ranges }) => ({
-      id: comment.id,
-      author: userName(comment.author),
-      created: shortTs(comment.created),
-      ranges: take(ranges),
-    }))
+    .map(({ comment, index, ranges }) => {
+      const { created, updated, edited } = commentTimes(comment);
+      return {
+        index,
+        id: comment.id,
+        author: userName(comment.author),
+        created,
+        updated,
+        edited,
+        ranges: take(ranges),
+      };
+    })
     .filter(({ ranges }) => ranges.length > 0);
   return {
     ...header,
@@ -541,7 +601,7 @@ function grepIssue(
 const issueGet = defineCommand({
   name: "issue.get",
   summary:
-    "Get one issue with its description; --comments N adds the newest comments; --grep <regex> returns only matching description and comment lines (comments tagged with id/author/created)",
+    "Get one issue with its description; --comments N adds the newest comments; --grep <regex> returns only matching description and comment lines (comments tagged with id/author/created/updated)",
   mcpTools: ["getJiraIssue"],
   args: [ISSUE_ARG],
   flags: Type.Object({
@@ -578,16 +638,10 @@ const issueGet = defineCommand({
       Type.String({
         minLength: 1,
         description:
-          "Return only the description and comment lines matching this regex (case-insensitive): header fields plus {matches, description?: {lines, ranges}, comments?: [{id, author, created, ranges}]}; searches all comments unless --comments N",
+          "Return only the description and comment lines matching this regex (case-insensitive): header fields plus {matches, description?: {lines, ranges}, comments?: [{id, author, created, updated?|edited?, ranges}]}; searches all comments unless --comments N",
       }),
     ),
-    context: Type.Optional(
-      Type.Integer({
-        minimum: 0,
-        maximum: 50,
-        description: "With --grep: lines of context around each match; overlapping ranges merge",
-      }),
-    ),
+    context: GREP_CONTEXT_FLAG,
   }),
   sideEffects: "none",
   examples: [
@@ -598,17 +652,7 @@ const issueGet = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    if (flags.context !== undefined && flags.grep === undefined) {
-      throw inputError("invalid_flag_combination", "--context needs --grep", "Add --grep <regex>");
-    }
-    if (flags.grep !== undefined && (ctx.full || flags.format === "adf")) {
-      throw inputError(
-        "invalid_flag_combination",
-        `--grep searches text lines and cannot be combined with ${ctx.full ? "--full" : "--format adf"}`,
-        "Use the default markdown format",
-      );
-    }
-    const matcher = flags.grep === undefined ? undefined : grepPattern(flags.grep);
+    const matcher = grepMatcher(ctx.full, flags);
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const requested = splitList(flags.issueFields);
     // Without --issue-fields, compact output also shows due date, components, fix versions, start
@@ -622,24 +666,26 @@ const issueGet = defineCommand({
       named = await defaultExtraFields(session);
       fields = [...DEFAULT_ISSUE_FIELDS, "duedate", "components", "fixVersions", ...named.keys()];
     }
-    const issue = await session.http.request<JiraIssue>({
-      method: "GET",
-      url: session.jiraUrl(`/rest/api/3/issue/${key}`),
-      query: {
-        fields: fields.join(","),
-        fieldsByKeys: flags.fieldsByKeys,
-        expand: flags.expand,
-        properties: flags.properties,
-        updateHistory: flags.updateHistory,
-        failFast: flags.failFast,
-      },
-    });
     const count = flags.comments ?? 0;
-    // --grep searches every comment unless --comments narrows it to the newest N.
-    const comments =
+    // --grep searches every comment unless --comments narrows it to the newest N. The comment read
+    // needs only the key, so it runs alongside the issue GET.
+    const [issue, comments] = await Promise.all([
+      session.http.request<JiraIssue>({
+        method: "GET",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}`),
+        query: {
+          fields: fields.join(","),
+          fieldsByKeys: flags.fieldsByKeys,
+          expand: flags.expand,
+          properties: flags.properties,
+          updateHistory: flags.updateHistory,
+          failFast: flags.failFast,
+        },
+      }),
       count > 0 || matcher !== undefined
-        ? await fetchComments(session, key, count > 0 ? count : undefined)
-        : undefined;
+        ? fetchComments(session, key, count > 0 ? count : undefined)
+        : undefined,
+    ]);
     if (ctx.full) {
       return comments === undefined ? issue : { ...issue, comments };
     }
@@ -941,15 +987,38 @@ const issueLinkTypes = defineCommand({
 const issueComments = defineCommand({
   name: "issue.comments",
   mcpTools: ["listJiraIssueComments"],
-  summary: "List comments on an issue",
+  summary:
+    "List comments on an issue in Jira's order; --grep <regex> searches every comment and returns only matching lines, each comment tagged with index (its 1-based position in this listing), id, author, created and updated/edited",
   args: [ISSUE_ARG],
-  flags: Type.Object({ format: ADF_FORMAT_FLAG, ...PAGING_FLAGS }),
+  flags: Type.Object({
+    format: ADF_FORMAT_FLAG,
+    ...PAGING_FLAGS,
+    grep: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Return only the comment lines matching this regex (case-insensitive): {matches, comments?: [{index, id, author, created, updated?|edited?, ranges}], commentsSearched}; reads every comment (hard cap 1000)",
+      }),
+    ),
+    context: GREP_CONTEXT_FLAG,
+  }),
   sideEffects: "none",
-  examples: ["atl issue comments ABC-123 --limit 10"],
+  examples: [
+    "atl issue comments ABC-123 --limit 10",
+    'atl issue comments ABC-123 --grep "vendor|supplier" --context 2',
+  ],
   async run(ctx, input) {
+    const { flags } = input;
+    const matcher = grepMatcher(ctx.full, flags);
+    if (matcher !== undefined) {
+      conflictingFlags("--grep", flags, ["limit", "cursor", "all"]);
+    }
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const paged = await paginateJiraOffset(
-      pagePolicy(input.flags, { defaultLimit: 25, maxPageSize: 100 }),
+      pagePolicy(matcher === undefined ? flags : { all: true }, {
+        defaultLimit: 25,
+        maxPageSize: 100,
+      }),
       (page: CommentPage) => page.comments ?? [],
       ({ startAt, pageSize }) =>
         session.http.request<CommentPage>({
@@ -958,10 +1027,16 @@ const issueComments = defineCommand({
           query: { startAt, maxResults: pageSize },
         }),
     );
+    if (matcher !== undefined) {
+      return {
+        ...grepIssue({}, undefined, paged.items, matcher, flags.context ?? 0, true),
+        truncated: paged.truncated,
+      };
+    }
     if (ctx.full) {
       return paged;
     }
-    return { ...paged, items: paged.items.map((c) => compactComment(c, input.flags.format)) };
+    return { ...paged, items: paged.items.map((c) => compactComment(c, flags.format)) };
   },
 });
 
@@ -1386,7 +1461,7 @@ const issueTree = defineCommand({
     }
     const { session, rawKey } = await issueSession(ctx, input.args.issue ?? "");
     const group = flags.groupBy === undefined ? undefined : await groupSpec(session, flags.groupBy);
-    const resolved = await requestedFields(session, flags.issueFields, LIST_ISSUE_FIELDS);
+    const resolved = await requestedFields(session, flags.issueFields, TREE_ISSUE_FIELDS);
     const requested = resolved.fields;
     const fields = group
       ? [group.field]
@@ -1720,7 +1795,11 @@ function slicePage<T>(items: readonly T[], flags: PagingFlags, defaultLimit: num
   return { items: items.slice(start, end), nextCursor: end < items.length ? String(end) : null };
 }
 
-function conflictingFlags(mode: string, flags: Record<string, unknown>, names: readonly string[]) {
+export function conflictingFlags(
+  mode: string,
+  flags: Record<string, unknown>,
+  names: readonly string[],
+) {
   const used = names
     .filter((name) => flags[name] !== undefined)
     .map((name) => `--${name.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`);

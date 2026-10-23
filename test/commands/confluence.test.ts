@@ -424,6 +424,9 @@ describe("page.get parent and --grep", () => {
     const bad = await rejection(run(pageGet, { page: "123456" }, { grep: "(" }));
     expect(bad.code).toBe("invalid_regex");
     expect(bad.category).toBe("input");
+    const inline = await rejection(run(pageGet, { page: "123456" }, { grep: "(?i)laptop" }));
+    expect(inline.code).toBe("invalid_regex");
+    expect(inline.hint).toMatch(/already match case-insensitively/);
     const orphan = await rejection(run(pageGet, { page: "123456" }, { context: 2 }));
     expect(orphan.code).toBe("invalid_flag_combination");
     const full = await rejection(
@@ -2188,6 +2191,19 @@ describe("page.versions and page.diff titles", () => {
       "Incident Contact Sheet",
       "Oncall Contacts (draft)",
     ]);
+  });
+
+  test("a title repeated from the row above is omitted", async () => {
+    routeUsers();
+    route("/api/v2/pages/123456/versions", {
+      results: [
+        { number: 3, authorId: "acc-1", page: { id: "123456", title: "A" } },
+        { number: 2, authorId: "acc-1", page: { id: "123456", title: "A" } },
+        { number: 1, authorId: "acc-1", page: { id: "123456", title: "B" } },
+      ],
+    });
+    const result = await run(pageVersions, { page: "123456" });
+    expect(itemsOf(result).map((item) => asRecord(item).title)).toEqual(["A", undefined, "B"]);
   });
 
   test("a rename shows as {from, to}; an unchanged title does not", async () => {

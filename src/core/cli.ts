@@ -457,6 +457,14 @@ function consumeTokens(
         );
       }
       const raw = info.kind === "boolean" ? (inline ?? "true") : takeValue(`--${name}`);
+      if (name === "grep" && raw === "-i") {
+        throw new AtlError("--grep was given -i, which is not a flag", {
+          code: "invalid_flag_value",
+          category: "input",
+          hint: "--grep already matches case-insensitively; drop -i and pass only the pattern. To search for the literal text -i, write \\-i",
+          next: [["atl", "commands", "run", "--fields", spec.name]],
+        });
+      }
       const value = coerce(spec, info, raw);
       if (info.list) {
         const existing = flags[info.key];
@@ -739,6 +747,25 @@ function synonymsOf(verb: string | undefined): readonly string[] | undefined {
   return Object.hasOwn(VERB_SYNONYMS, key) ? VERB_SYNONYMS[key] : undefined;
 }
 
+/** Longest run of >=2 typed words after the first that is exactly a registry command name. */
+function suffixCommand(
+  names: readonly string[],
+  typedWords: readonly string[],
+): string | undefined {
+  for (let length = typedWords.length - 1; length >= 2; length--) {
+    for (let start = 1; start + length <= typedWords.length; start++) {
+      const candidate = typedWords
+        .slice(start, start + length)
+        .join(" ")
+        .toLowerCase();
+      if (names.includes(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 function unknownCommand(
   reg: CommandRegistry,
   words: readonly string[],
@@ -767,14 +794,36 @@ function unknownCommand(
     .slice(0, groupLength)
     .map((word) => word.toLowerCase())
     .join(" ");
-  let suggestion = synonyms
-    ?.map((replacement) => `${typedGroup} ${replacement}`)
-    .find((candidate) => names.includes(candidate));
+  const exact = suffixCommand(names, typedWords);
+  let suggestion =
+    exact ??
+    synonyms
+      ?.map((replacement) => `${typedGroup} ${replacement}`)
+      .find((candidate) => names.includes(candidate));
+  // A typed first word that is a real group keeps suggestions inside it (`page list` is never
+  // `space list`).
+  const group = words[0];
+  const siblings =
+    group === undefined || !reg.isGroupPrefix([group])
+      ? []
+      : names.filter((name) => name.startsWith(`${group} `));
+  const pool = siblings.length > 0 ? siblings : names;
+  const lastWords = new Set(names.map((name) => name.split(" ").at(-1)));
   // A recognised verb whose command does not exist (`page remove`) must not fall through to a
   // near spelling with another intent (`page move`): list the group's commands instead.
-  let bestDistance = synonyms === undefined ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
-  for (const name of names) {
-    const typed = typedWords.slice(0, name.split(" ").length).join(" ").toLowerCase();
+  let bestDistance =
+    exact === undefined && synonyms === undefined
+      ? Number.POSITIVE_INFINITY
+      : Number.NEGATIVE_INFINITY;
+  for (const name of pool) {
+    const parts = name.split(" ");
+    const typedParts = typedWords.slice(0, parts.length);
+    // A typed last word that is already a registry verb (`list`) only matches commands ending in it.
+    const typedLast = typedParts.at(-1)?.toLowerCase();
+    if (lastWords.has(typedLast) && typedLast !== parts.at(-1)) {
+      continue;
+    }
+    const typed = typedParts.join(" ").toLowerCase();
     const distance = editDistance(typed, name.toLowerCase());
     if (distance < bestDistance && distance <= Math.max(2, Math.floor(typed.length / 3))) {
       suggestion = name;
@@ -782,11 +831,6 @@ function unknownCommand(
     }
   }
 
-  const group = words[0];
-  const siblings =
-    group === undefined || !reg.isGroupPrefix([group])
-      ? []
-      : names.filter((name) => name.startsWith(`${group} `));
   const hint =
     suggestion !== undefined
       ? `Did you mean "atl ${suggestion}"?`

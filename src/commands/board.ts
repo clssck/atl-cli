@@ -9,8 +9,12 @@ import { PAGING_FLAGS, pagePolicy, queryLiteral, shortTs } from "./common.ts";
 import {
   approximateCount,
   compactIssue,
+  conflictingFlags,
   fetchFields,
+  ISSUE_FIELDS_FLAG,
   jiraDeps,
+  LIST_ISSUE_FIELDS,
+  requestedFields,
   searchJql,
   type FieldRecord,
 } from "./jira.ts";
@@ -280,8 +284,6 @@ const boardGet = defineCommand({
   },
 });
 
-const ISSUE_FIELDS = ["summary", "status", "issuetype", "priority", "assignee", "updated"];
-
 const SPRINT_STATES: Readonly<Record<string, string>> = {
   active: "openSprints()",
   open: "openSprints()",
@@ -305,18 +307,25 @@ async function searchIssues(
   ctx: CommandContext,
   session: Session,
   jql: string,
-  flags: { limit?: number | undefined; all?: boolean | undefined; cursor?: string | undefined },
+  flags: {
+    issueFields?: string | undefined;
+    limit?: number | undefined;
+    all?: boolean | undefined;
+    cursor?: string | undefined;
+  },
 ): Promise<Paged<unknown>> {
+  const { fields, names } = await requestedFields(session, flags.issueFields, LIST_ISSUE_FIELDS);
   const paged = await searchJql(
     session,
     pagePolicy(flags, { defaultLimit: 25, maxPageSize: 100 }),
     jql,
-    ISSUE_FIELDS.join(","),
+    fields.join(","),
   );
+  const withDescription = fields.includes("description") || fields.includes("*all");
   return {
     ...paged,
     items: paged.items.map((issue) =>
-      ctx.full ? issue : compactIssue(session, issue, undefined, false, true),
+      ctx.full ? issue : compactIssue(session, issue, undefined, withDescription, true, names),
     ),
   };
 }
@@ -377,6 +386,7 @@ const boardIssues = defineCommand({
       }),
     ),
     count: Type.Optional(Type.Boolean({ description: "Return only the approximate count" })),
+    issueFields: ISSUE_FIELDS_FLAG,
     ...PAGING_FLAGS,
   }),
   sideEffects: "none",
@@ -386,8 +396,12 @@ const boardIssues = defineCommand({
     "atl board issues 1 --dataset backlog --count",
     "atl board issues 2 --sprint active",
     "atl board issues NMS --dataset backlog",
+    "atl board issues 1 --issue-fields summary,labels,issuelinks",
   ],
   async run(ctx, input) {
+    if (input.flags.count === true) {
+      conflictingFlags("--count", input.flags, ["issueFields"]);
+    }
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
     const board = await loadBoard(session, input.args.board ?? "");
     const clauses = [`(${boardJql(board)})`];
@@ -576,8 +590,10 @@ const boardSprints = defineCommand({
   ],
   async run(ctx, input) {
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
-    const board = await loadBoard(session, input.args.board ?? "");
-    const fields = await fetchFields(session);
+    const [board, fields] = await Promise.all([
+      loadBoard(session, input.args.board ?? ""),
+      fetchFields(session),
+    ]);
     const sprintField = fields.find((field) => field.schema?.custom?.endsWith(":gh-sprint"))?.id;
     if (sprintField === undefined) {
       return { items: [] };

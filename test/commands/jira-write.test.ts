@@ -38,6 +38,11 @@ const TYPES = ok({
     { id: "10004", name: "Story" },
   ],
 });
+const PRIORITIES = [
+  { id: "1", name: "Highest" },
+  { id: "2", name: "High" },
+  { id: "3", name: "Medium" },
+];
 const created = (body?: unknown): Reply => ({ status: 201, body });
 const noContent: Reply = { status: 204 };
 
@@ -494,6 +499,7 @@ describe("--set and --fields-file field names", () => {
     serve({
       [FIELD_ROUTE]: FIELDS,
       [TYPES_ROUTE]: TYPES,
+      "GET /rest/api/3/priority": ok(PRIORITIES),
       "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }),
     });
     await run("issue.create", {}, { project: "ABC", type: "Task", summary: "S", set, fieldsFile });
@@ -513,7 +519,7 @@ describe("--set and --fields-file field names", () => {
     ]);
     expect(fields).toMatchObject({
       customfield_10016: 4,
-      priority: "High",
+      priority: { id: "2" },
       customfield_10034: "n1",
     });
   });
@@ -532,10 +538,83 @@ describe("--set and --fields-file field names", () => {
     });
   });
 
-  test("custom field ids and common system fields are sent as typed without reading the field list", async () => {
-    const fields = await fieldsOf(["customfield_10016=3", "labels=x", "priority=High"]);
-    expect(fields).toMatchObject({ customfield_10016: 3, labels: "x", priority: "High" });
+  test("custom field ids and common system fields are sent without reading the field list", async () => {
+    serve({
+      [TYPES_ROUTE]: TYPES,
+      "GET /rest/api/3/priority": ok(PRIORITIES),
+      "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }),
+    });
+    await run(
+      "issue.create",
+      {},
+      {
+        project: "ABC",
+        type: "Task",
+        summary: "S",
+        set: ["customfield_10016=3", "labels=web, ui", "priority=High"],
+      },
+    );
+    expect(bodyField(0, "fields")).toMatchObject({
+      customfield_10016: 3,
+      labels: ["web", "ui"],
+      priority: { id: "2" },
+    });
     expect(sent.map((s) => s.path)).not.toContain("/rest/api/3/field");
+  });
+
+  test("priority text resolves by name or id; labels text splits on commas and spaces", async () => {
+    serve({
+      [TYPES_ROUTE]: TYPES,
+      "GET /rest/api/3/priority": ok(PRIORITIES),
+      "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }),
+    });
+    await run(
+      "issue.create",
+      {},
+      { project: "ABC", type: "Task", summary: "S", set: ["priority=high", "labels=a b,c"] },
+    );
+    await run(
+      "issue.create",
+      {},
+      { project: "ABC", type: "Task", summary: "S", set: ["priority=3", 'labels="solo"'] },
+    );
+    expect(bodyField(0, "fields")).toMatchObject({
+      priority: { id: "2" },
+      labels: ["a", "b", "c"],
+    });
+    expect(bodyField(1, "fields")).toMatchObject({ priority: { id: "3" }, labels: ["solo"] });
+  });
+
+  test("JSON priority and labels forms pass through; null clears", async () => {
+    const fields = await fieldsOf(['priority={"name":"High"}', 'labels=["a"]']);
+    expect(fields).toMatchObject({ priority: { name: "High" }, labels: ["a"] });
+    sent = [];
+    const cleared = await fieldsOf(["priority=null", "labels=null"]);
+    expect(cleared).toMatchObject({ priority: null, labels: null });
+    expect(sent.map((s) => s.path)).not.toContain("/rest/api/3/priority");
+  });
+
+  test("an unknown priority name is unknown_priority; nothing is written", async () => {
+    serve({
+      [TYPES_ROUTE]: TYPES,
+      "GET /rest/api/3/priority": ok(PRIORITIES),
+      "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }),
+    });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", set: ["priority=Urgent"] },
+      ),
+    );
+    expect(error.code).toBe("unknown_priority");
+    expect(writes()).toHaveLength(0);
+  });
+
+  test("--fields-file priority and labels are sent verbatim", async () => {
+    const extra = await file("verbatim.json", '{"priority":"High","labels":"web,ui"}');
+    const fields = await named([], extra);
+    expect(fields).toMatchObject({ priority: "High", labels: "web,ui" });
   });
 
   test("the field list is read once however many names are set", async () => {

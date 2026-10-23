@@ -9,7 +9,7 @@ export function grepPattern(source: string): RegExp {
     throw inputError(
       "invalid_regex",
       `--grep is not a valid regular expression: ${error instanceof Error ? error.message : source}`,
-      "Patterns use JavaScript regex syntax; escape literal ( ) [ ] { } . * + ? | ^ $ with a backslash",
+      "Patterns use JavaScript regex syntax and already match case-insensitively; inline flags such as (?i) are not supported. Escape literal ( ) [ ] { } . * + ? | ^ $ with a backslash",
     );
   }
 }

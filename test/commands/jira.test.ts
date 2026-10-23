@@ -181,6 +181,15 @@ const doc = (text: string) => ({
   content: [{ type: "paragraph", content: [{ type: "text", text }] }],
 });
 
+/** A comment as the API returns it; `updated` defaults to `created`. */
+const comment = (id: string, author: string, text: string, updated?: string) => ({
+  id,
+  author: { accountId: `acc-${id}`, displayName: author },
+  created: "2026-10-03T09:00:00.000+0000",
+  updated: updated ?? "2026-10-03T09:00:00.000+0000",
+  body: paragraphs(text),
+});
+
 const ISSUE = {
   id: "10042",
   key: "ABC-123",
@@ -532,9 +541,9 @@ describe("issue.get", () => {
       },
     });
     const result = recordOf(await run("issue.get", { issue: "ABC-123" }, { comments: 2 }));
-    expect(calls[2]?.path).toBe("/rest/api/3/issue/ABC-123/comment");
-    expect(calls[2]?.query.get("orderBy")).toBe("-created");
-    expect(calls[2]?.query.get("maxResults")).toBe("2");
+    const commentCall = calls.find((c) => c.path === "/rest/api/3/issue/ABC-123/comment");
+    expect(commentCall?.query.get("orderBy")).toBe("-created");
+    expect(commentCall?.query.get("maxResults")).toBe("2");
     expect(result.comments).toEqual([
       { id: "900", author: "G", created: "c2", updated: "u2", body: ["Second"] },
       { id: "899", author: "A", created: "c1", updated: "u1", body: ["First"] },
@@ -556,13 +565,6 @@ describe("issue.get", () => {
         description: paragraphs("Intro", "Contact the Vendor about it", "Closing"),
       },
     };
-    const comment = (id: string, author: string, text: string) => ({
-      id,
-      author: { accountId: `acc-${id}`, displayName: author },
-      created: "2026-10-03T09:00:00.000+0000",
-      updated: "2026-10-03T09:00:00.000+0000",
-      body: paragraphs(text),
-    });
 
     test("returns the header and only matching description and comment ranges, comments tagged", async () => {
       respond({
@@ -654,6 +656,84 @@ describe("issue.get", () => {
       expect(result.commentsSearched).toBe(1);
       expect("description" in result).toBe(false);
       expect("comments" in result).toBe(false);
+    });
+
+    test("comments carry updated or edited, like the comments listing", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": ISSUE,
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 2,
+          comments: [
+            {
+              ...comment("1", "Ann", "vendor later"),
+              updated: "2026-10-03T15:06:16.000+0000",
+            },
+            {
+              ...comment("2", "Bob", "vendor quick"),
+              created: "2026-10-23T10:56:14.082+0200",
+              updated: "2026-10-23T10:56:14.431+0200",
+            },
+          ],
+        },
+      });
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }, { grep: "vendor" }));
+      expect(result.comments).toEqual([
+        {
+          id: "1",
+          author: "Ann",
+          created: "2026-10-03T09:00:00+0000",
+          updated: "2026-10-03T15:06:16+0000",
+          ranges: [{ from: 1, text: ["vendor later"] }],
+        },
+        {
+          id: "2",
+          author: "Bob",
+          created: "2026-10-23T10:56:14+0200",
+          edited: true,
+          ranges: [{ from: 1, text: ["vendor quick"] }],
+        },
+      ]);
+    });
+
+    test("the comment request goes out while the issue GET is still in flight", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": ISSUE,
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 1,
+          comments: [comment("1", "Ann", "vendor")],
+        },
+      });
+      const served = jiraDeps.fetch;
+      const { promise: commentRequested, resolve: release } = Promise.withResolvers<void>();
+      // The issue GET answers only once the comment request has arrived: a sequential command never
+      // sends that request, so the GET never resolves and the test times out.
+      jiraDeps.fetch = async (input, init) => {
+        const path = new URL(input).pathname;
+        if (path.endsWith("/issue/ABC-123/comment")) {
+          release();
+        } else if (path.endsWith("/issue/ABC-123")) {
+          await commentRequested;
+        }
+        if (served === undefined) {
+          throw new Error("no fetch stub");
+        }
+        return served(input, init);
+      };
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }, { grep: "vendor" }));
+      expect(result.commentsSearched).toBe(1);
+    });
+
+    test("an unknown issue fails with the issue GET error", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-999/comment": { startAt: 0, total: 0, comments: [] },
+      });
+      const error = await failure(run("issue.get", { issue: "ABC-999" }, { grep: "x" }));
+      expect(error.status).toBe(404);
     });
 
     test("bad usage is an input error before any request", async () => {
@@ -1166,6 +1246,117 @@ describe("issue.comments", () => {
       ["3", undefined, "2026-10-23T12:00:00+0200"],
     ]);
   });
+
+  describe("--grep", () => {
+    test("scans every page and tags each hit with its 1-based position in the listing", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/comment": sequence(
+          {
+            startAt: 0,
+            total: 4,
+            comments: [comment("11", "Ann", "vendor replied"), comment("12", "Bob", "unrelated")],
+          },
+          {
+            startAt: 2,
+            total: 4,
+            comments: [
+              comment("13", "Cy", "nothing here"),
+              comment("14", "Di", "VENDOR correction", "2026-10-03T12:30:00.000+0000"),
+            ],
+          },
+        ),
+      });
+      const result = recordOf(
+        await run("issue.comments", { issue: "ABC-123" }, { grep: "vendor", context: 0 }),
+      );
+      expect(calls.map((c) => c.query.get("startAt"))).toEqual(["0", "2"]);
+      expect(calls.every((c) => c.query.get("orderBy") === null)).toBe(true);
+      expect(calls[0]?.query.get("maxResults")).toBe("100");
+      expect(result).toEqual({
+        matches: 2,
+        commentsSearched: 4,
+        comments: [
+          {
+            index: 1,
+            id: "11",
+            author: "Ann",
+            created: "2026-10-03T09:00:00+0000",
+            ranges: [{ from: 1, text: ["vendor replied"] }],
+          },
+          {
+            index: 4,
+            id: "14",
+            author: "Di",
+            created: "2026-10-03T09:00:00+0000",
+            updated: "2026-10-03T12:30:00+0000",
+            ranges: [{ from: 1, text: ["VENDOR correction"] }],
+          },
+        ],
+      });
+    });
+
+    test("an edit within the creation second is marked edited", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 1,
+          comments: [
+            {
+              ...comment("1", "Ann", "vendor"),
+              created: "2026-10-23T10:56:14.082+0200",
+              updated: "2026-10-23T10:56:14.431+0200",
+            },
+          ],
+        },
+      });
+      const result = recordOf(
+        await run("issue.comments", { issue: "ABC-123" }, { grep: "vendor" }),
+      );
+      expect(result.comments).toMatchObject([{ index: 1, id: "1", edited: true }]);
+      expect(JSON.stringify(result)).not.toContain('"updated"');
+    });
+
+    test("no hit reports matches 0 and the comments searched", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 1,
+          comments: [comment("1", "Ann", "hello")],
+        },
+      });
+      expect(await run("issue.comments", { issue: "ABC-123" }, { grep: "nomatch" })).toEqual({
+        matches: 0,
+        commentsSearched: 1,
+      });
+    });
+
+    test("--grep cannot be combined with paging flags and fails before any request", async () => {
+      respond({ "/rest/api/3/issue/ABC-123/comment": { startAt: 0, total: 0, comments: [] } });
+      for (const paging of [{ limit: 5 }, { cursor: "3" }, { all: true }]) {
+        const error = await failure(
+          run("issue.comments", { issue: "ABC-123" }, { grep: "x", ...paging }),
+        );
+        expect(error.code).toBe("conflicting_flags");
+        expect(error.message).toContain("--grep cannot be combined with");
+      }
+      expect(calls).toEqual([]);
+    });
+
+    test("bad usage is an input error before any request", async () => {
+      respond({});
+      expect((await failure(run("issue.comments", { issue: "ABC-123" }, { grep: "(" }))).code).toBe(
+        "invalid_regex",
+      );
+      expect(
+        (await failure(run("issue.comments", { issue: "ABC-123" }, { context: 1 }))).code,
+      ).toBe("invalid_flag_combination");
+      expect(
+        (await failure(run("issue.comments", { issue: "ABC-123" }, { grep: "x", format: "adf" })))
+          .code,
+      ).toBe("invalid_flag_combination");
+      expect(calls).toEqual([]);
+    });
+  });
 });
 
 describe("jql", () => {
@@ -1535,9 +1726,7 @@ describe("issue.tree", () => {
       "parent in (ABC-6) ORDER BY key ASC",
     ]);
     expect(calls[0]?.query.get("fields")).toBe("summary,status,issuetype");
-    expect(calls[1]?.query.get("fields")).toBe(
-      "summary,status,issuetype,priority,assignee,updated,parent",
-    );
+    expect(calls[1]?.query.get("fields")).toBe("summary,status,issuetype,parent");
   });
 
   test("an issue without children is an empty tree", async () => {
@@ -1670,6 +1859,15 @@ describe("issue.tree", () => {
     });
     await run("issue.tree", { issue: "ABC-1" }, { issueFields: "summary,assignee" });
     expect(calls[1]?.query.get("fields")).toBe("summary,assignee,parent");
+  });
+
+  test("--issue-fields timespent requests it in place of the lean default", async () => {
+    respond({
+      "/rest/api/3/issue/ABC-1": ROOT,
+      "/rest/api/3/search/jql": sequence(search(child("ABC-2", "ABC-1")), search()),
+    });
+    await run("issue.tree", { issue: "ABC-1" }, { issueFields: "summary,timespent" });
+    expect(calls[1]?.query.get("fields")).toBe("summary,timespent,parent");
   });
 });
 

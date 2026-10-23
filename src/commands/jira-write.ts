@@ -19,6 +19,7 @@ import {
   projectKey,
   resolveField,
   resolveIssueTypeId,
+  resolvePriorityId,
   userName,
   type JiraComment,
   type JiraIssue,
@@ -51,7 +52,7 @@ const FIELD_FLAGS = {
   set: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "field=value; the field is an id or display name (case-insensitive); the value is JSON when it parses, else text shaped to the field type (number, option, user, sprint id). Repeatable",
+        "field=value; the field is an id or display name (case-insensitive); the value is JSON when it parses, else text shaped to the field type (number, option, user, sprint id; priority=High by name or id, labels=web,ui as a comma/space list). Repeatable",
     }),
   ),
   fieldsFile: Type.Optional(
@@ -108,6 +109,9 @@ function assigneeValue(raw: string): { accountId: string | null } {
 }
 
 const NUMBER_TEXT = /^-?\d+(?:[.,]\d+)?$/;
+
+/** Jira labels cannot contain spaces, so `--set labels=` text splits on commas and whitespace. */
+const LABEL_SEPARATORS = /[\s,]+/;
 
 /** Comma-separated `--set` text (or a JSON array) as a list of strings. */
 function listOf(json: unknown, text: string): unknown[] {
@@ -180,12 +184,19 @@ function shapedValue(
   return undefined;
 }
 
-/** One `--set field=value` value: JSON when it parses, else a string; summary is always text. */
+/**
+ * One `--set field=value` value: JSON when it parses, else a string; summary is always text,
+ * `labels` text is a comma/space list. JSON arrays, objects and `null` pass through.
+ */
 function fieldValue(name: string, raw: string, field: FieldRecord | undefined): unknown {
   if (name === "summary") {
     return raw;
   }
   const parsed = tryParseJson(raw);
+  if (name === "labels" && (parsed === undefined || typeof parsed.value !== "object")) {
+    const text = typeof parsed?.value === "string" ? parsed.value : raw;
+    return text.split(LABEL_SEPARATORS).filter((label) => label !== "");
+  }
   if (name === "assignee" && (parsed === undefined || typeof parsed.value === "string")) {
     return assigneeValue(parsed === undefined ? raw : String(parsed.value));
   }
@@ -251,8 +262,10 @@ async function resolutionValue(session: Session, value: unknown): Promise<unknow
 
 /**
  * Merge `--fields-file`, then `--set`, then the dedicated flags. Keys may be field ids or names;
- * names resolve through the site's field list (read once, only when a key needs it). A dedicated
- * flag colliding with a generic source is an input error rather than a silent override.
+ * names resolve through the site's field list (read once, only when a key needs it). A `--set`
+ * priority given as text (name or id) is sent as its `{id}`; `--fields-file` values are sent as
+ * written. A dedicated flag colliding with a generic source is an input error rather than a
+ * silent override.
  */
 async function buildFields(
   session: Session,
@@ -283,11 +296,15 @@ async function buildFields(
       throw inputError(
         "invalid_set",
         `--set expects field=value, got "${entry}"`,
-        'Example: --set labels=\'["a","b"]\' or --set "Story point estimate=3".',
+        'Example: --set priority=High, --set labels=web,ui, --set labels=\'["a","b"]\' or --set "Story point estimate=3".',
       );
     }
     const { id, field } = await lookup(name);
-    merged[id] = fieldValue(id, entry.slice(equals + 1), field);
+    const value = fieldValue(id, entry.slice(equals + 1), field);
+    merged[id] =
+      id === "priority" && (typeof value === "string" || typeof value === "number")
+        ? { id: await resolvePriorityId(session, String(value)) }
+        : value;
   }
   if (Object.hasOwn(merged, "resolution")) {
     merged.resolution = await resolutionValue(session, merged.resolution);
@@ -609,7 +626,7 @@ const issueCreate = defineCommand({
   examples: [
     'atl issue create --project ABC --type Task --summary "Fix login" --body "Login fails on Safari"',
     'atl issue create --project ABC --type Task --summary "Fix login" --file desc.md',
-    'atl issue create --project ABC --type Bug --summary Crash --set priority=\'{"name":"High"}\' --set labels=\'["web"]\'',
+    "atl issue create --project ABC --type Bug --summary Crash --set priority=High --set labels=web,ui",
     'atl issue create --project ABC --type Story --summary Spike --transition "In Progress" --plan',
   ],
   async run(ctx, input) {
@@ -707,8 +724,8 @@ const issueUpdate = defineCommand({
   examples: [
     'atl issue update ABC-123 --summary "New title"',
     "atl issue update ABC-123 --body 'Updated steps to reproduce'",
-    "atl issue update ABC-123 --file desc.md --set labels='[\"web\"]'",
-    'atl issue update ABC-123 --set resolution=null --set priority=\'{"name":"High"}\' --plan',
+    "atl issue update ABC-123 --file desc.md --set labels=web",
+    "atl issue update ABC-123 --set resolution=null --set priority=High --plan",
   ],
   async run(ctx, input) {
     const { flags } = input;

@@ -724,14 +724,18 @@ function listComment(
   };
 }
 
-/** Version list item: author as display name, minorEdit only when true. */
+/**
+ * Version list item: author as display name, minorEdit only when true. The title is dropped when it
+ * equals the `previous` row's (the row above), so a page's repeated title shows only where it changes.
+ */
 function listVersion(
   version: Version,
   names: ReadonlyMap<string, string>,
+  previous?: Version,
 ): Record<string, unknown> {
   return {
     number: version.number,
-    title: version.page?.title,
+    title: previous?.page?.title === version.page?.title ? undefined : version.page?.title,
     message: version.message === "" ? undefined : version.message,
     minorEdit: version.minorEdit === true ? true : undefined,
     author: version.authorId === undefined ? undefined : names.get(version.authorId),
@@ -1039,7 +1043,8 @@ const ContentListFlags = Type.Object({ type: TYPE_FLAG, space: PAGE_SPACE_FLAG, 
 export const pageVersions = defineCommand({
   name: "page.versions",
   mcpTools: ["listConfluenceContentVersions"],
-  summary: "List versions of a page or blog post; author is a display name",
+  summary:
+    "List versions of a page or blog post; author is a display name; title appears on the first row and where it changes from the row above",
   args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: ContentListFlags,
   sideEffects: "none",
@@ -1058,7 +1063,12 @@ export const pageVersions = defineCommand({
         session,
         paged.items.map((version) => version.authorId),
       );
-      return { ...paged, items: paged.items.map((version) => listVersion(version, names)) };
+      return {
+        ...paged,
+        items: paged.items.map((version, index) =>
+          listVersion(version, names, paged.items[index - 1]),
+        ),
+      };
     });
   },
 });

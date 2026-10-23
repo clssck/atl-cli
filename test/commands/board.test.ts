@@ -309,6 +309,89 @@ describe("board.issues", () => {
     });
   });
 
+  test("the default item fields are the same list jql uses", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/search/jql"] = ISSUES;
+    await run("board.issues", { board: "1" });
+    expect(calls.find((c) => c.path === "/rest/api/3/search/jql")?.query.get("fields")).toBe(
+      "summary,status,issuetype,priority,assignee,updated",
+    );
+  });
+
+  test("--issue-fields requests the named fields in place of the default list", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/search/jql"] = {
+      issues: [
+        {
+          id: "10001",
+          key: "KAN-1",
+          fields: { summary: "One", labels: ["nm-duplicate"], issuelinks: [] },
+        },
+      ],
+      isLast: true,
+    };
+    const result = await run("board.issues", { board: "1" }, { issueFields: "summary,labels" });
+    expect(calls.find((c) => c.path === "/rest/api/3/search/jql")?.query.get("fields")).toBe(
+      "summary,labels",
+    );
+    expect(result).toEqual({ items: [{ key: "KAN-1", summary: "One", labels: ["nm-duplicate"] }] });
+  });
+
+  test("--issue-fields resolves display names and shows them under that name", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/field"] = [
+      { id: "customfield_10016", name: "Story point estimate", custom: true },
+    ];
+    rest["GET /rest/api/3/search/jql"] = {
+      issues: [{ id: "10001", key: "KAN-1", fields: { customfield_10016: 5 } }],
+      isLast: true,
+    };
+    const result = await run(
+      "board.issues",
+      { board: "1" },
+      { issueFields: "Story point estimate" },
+    );
+    expect(calls.find((c) => c.path === "/rest/api/3/search/jql")?.query.get("fields")).toBe(
+      "customfield_10016",
+    );
+    expect(result).toEqual({ items: [{ key: "KAN-1", "Story point estimate": 5 }] });
+  });
+
+  test("--issue-fields description renders the description", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/search/jql"] = {
+      issues: [
+        {
+          id: "10001",
+          key: "KAN-1",
+          fields: {
+            description: {
+              type: "doc",
+              version: 1,
+              content: [{ type: "paragraph", content: [{ type: "text", text: "Body" }] }],
+            },
+          },
+        },
+      ],
+      isLast: true,
+    };
+    const result = await run("board.issues", { board: "1" }, { issueFields: "description" });
+    expect(result).toEqual({ items: [{ key: "KAN-1", description: ["Body"] }] });
+  });
+
+  test("--count cannot be combined with --issue-fields and fails before any request", async () => {
+    const error = await run(
+      "board.issues",
+      { board: "1" },
+      { count: true, issueFields: "summary" },
+    ).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "conflicting_flags",
+      message: "--count cannot be combined with --issue-fields",
+    });
+    expect(calls).toEqual([]);
+  });
+
   test("uses the board filter, adds backlog and extra JQL clauses", async () => {
     gql.BoardGet = {
       data: {
@@ -527,6 +610,28 @@ describe("board.sprints", () => {
     rest["GET /rest/api/3/field"] = [{ id: "summary" }];
     expect(await run("board.sprints", { board: "1" })).toEqual({ items: [] });
     expect(calls.some((c) => c.path === "/rest/api/3/search/jql")).toBe(false);
+  });
+
+  test("the field catalog is requested while the board is still loading", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/field"] = [{ id: "summary" }];
+    const served = jiraDeps.fetch;
+    const { promise: fieldsRequested, resolve: release } = Promise.withResolvers<void>();
+    // The board answers only once the field request has arrived: a sequential command never sends
+    // it, so the board never loads and the test times out.
+    jiraDeps.fetch = async (input, init) => {
+      const path = new URL(input).pathname;
+      if (path.endsWith("/rest/api/3/field")) {
+        release();
+      } else if (path.endsWith("/graphql")) {
+        await fieldsRequested;
+      }
+      if (served === undefined) {
+        throw new Error("no fetch stub");
+      }
+      return served(input, init);
+    };
+    expect(await run("board.sprints", { board: "1" })).toEqual({ items: [] });
   });
 
   test("--summary totals points by status category, reports carry-over and velocity", async () => {
