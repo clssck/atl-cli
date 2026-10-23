@@ -76,7 +76,7 @@ Method, scenarios and scripts: [eval/README.md](eval/README.md).
 Install from npm; Bun >= 1.4.4 must be on PATH at runtime (the `atl` launcher re-executes under Bun with `.env` autoloading disabled):
 
 ```bash
-bun add -g atl-cli                # or: npm i -g atl-cli
+bun add -g @clssck/atl-cli        # or: npm i -g @clssck/atl-cli
 atl --help
 atl auth login                    # opens the browser; approve, then return
 atl doctor

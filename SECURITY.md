@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest published release of `atl-cli` on npm. Older versions are not maintained.
+Security fixes are provided for the latest published release of `@clssck/atl-cli` on npm. Older versions are not maintained.
 
 | Version | Supported |
 | ------- | --------- |

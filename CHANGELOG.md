@@ -13,7 +13,7 @@
 - No runtime dependencies; `bun run compile` produces a single bytecode-compiled binary (plus `compile:linux`, `compile:windows`).
 - Strict type-aware linting and a CI check.
 - Daily MCP upstream watcher that opens an issue when the Atlassian MCP changes.
-- npm package `atl-cli` (bin `atl`): a Bun-targeted bundle `dist/atl.js` built by `bun run build`, shipped with the agent skill, `plugin.json` and `LICENSE`.
+- npm package `@clssck/atl-cli` (bin `atl`; the unscoped `atl-cli` is refused by npm as too similar to existing names): a Bun-targeted bundle `dist/atl.js` built by `bun run build`, shipped with the agent skill, `plugin.json` and `LICENSE`.
 - Node-compatible launcher `bin/atl.js` that re-executes under Bun >= 1.4.4 (also the CI and release version) with `--no-env-file` (a stray `.env` cannot redirect settings or tokens) and reports a JSON error when Bun is missing or too old.
 - Native binary scripts renamed to `compile`, `compile:linux`, `compile:windows`.
 - Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (private vulnerability reporting), issue forms, a pull request template, `.gitattributes` (LF line endings) and a `.gitleaks.toml` config.
