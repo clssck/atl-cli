@@ -297,8 +297,26 @@ export function parseConfluenceRef(input: string): ConfluenceRef {
   throw inputError(
     "invalid_content_ref",
     `Unrecognized Confluence reference: ${input}`,
-    "Pass a page id, page URL, tiny link, or ARI. To look a page up by title: atl space pages <SPACE> --title <title>, or atl cql 'title = \"<title>\"' when the space is unknown (titles repeat across spaces)",
+    'Pass a page id, page URL, tiny link, or ARI. Page read commands also take a title (atl page get "<title>" --space <SPACE>); elsewhere look the id up with atl space pages <SPACE> --title <title>, or atl cql \'title = "<title>"\' when the space is unknown (titles repeat across spaces)',
   );
+}
+
+/**
+ * A page title given where a page reference is expected: anything that is not an id, ARI, or URL
+ * (tiny links only come as `/x/` URLs). Returns the title as typed, trimmed.
+ */
+export function pageTitleRef(input: string): string | undefined {
+  const text = unwrapRef(input);
+  const title = input.trim();
+  if (
+    title === "" ||
+    NUMERIC.test(text) ||
+    /^ari:cloud:/i.test(text) ||
+    tryUrl(text) !== undefined
+  ) {
+    return undefined;
+  }
+  return title;
 }
 
 function normalizeKey(text: string): string | undefined {

@@ -1,7 +1,7 @@
 import { Type } from "../core/schema.ts";
 import { adfToMarkdown, parseAdfBody, type AdfDoc } from "../adf/index.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
-import { AtlError, inputError } from "../core/errors.ts";
+import { AtlError, inputError, type NextCommand } from "../core/errors.ts";
 import type { FetchLike, Query } from "../core/http.ts";
 import { keepRaw, splitList, withSource, writeDiagnostic } from "../core/output.ts";
 import {
@@ -14,7 +14,12 @@ import {
   type Paged,
 } from "../core/paginate.ts";
 import { currentAccountId, openSession, type Session } from "../core/session.ts";
-import { parseConfluenceRef, parseDisplayLink, parseSpaceRef } from "../resolve/index.ts";
+import {
+  pageTitleRef,
+  parseConfluenceRef,
+  parseDisplayLink,
+  parseSpaceRef,
+} from "../resolve/index.ts";
 import {
   ADF_FORMAT_FLAG,
   PAGING_FLAGS,
@@ -27,6 +32,7 @@ import {
   type AdfFormat,
   type PagingFlags,
 } from "./common.ts";
+import { GREP_RANGE_CAP, grepPattern, grepRanges } from "./grep.ts";
 
 export const confluenceGroups: Readonly<Record<string, string>> = {
   page: "Confluence pages and blog posts: get, diff, ancestors, tree, children, versions, labels, permissions, restriction, operations, properties, property set|delete, create, update",
@@ -84,6 +90,7 @@ interface ApiTreeNode {
   id: string;
   title?: string;
   type?: string;
+  spaceId?: string;
   status?: string;
   parentId?: string;
   depth?: number;
@@ -176,6 +183,16 @@ export const TYPE_FLAG = Type.Optional(
   }),
 );
 
+/** Narrows a page title to one space; ids and links name their own page. */
+const PAGE_SPACE_FLAG = Type.Optional(
+  Type.String({
+    description: "Space key, id, or URL: narrows a page title (ignored for ids and links)",
+  }),
+);
+
+const PAGE_ARG =
+  "Page id, URL, tiny link, ARI, or exact title (titles repeat across spaces: add --space)";
+
 const COMMENT_KIND_LITERALS = [Type.Literal("footer"), Type.Literal("inline")] as const;
 
 export const COMMENT_KIND_FLAG = Type.Optional(
@@ -252,29 +269,161 @@ export function contentTarget(input: string, type: "page" | "blogpost" | undefin
   };
 }
 
+/** Search results fetched per title lookup; enough to tell a case variant from the exact title. */
+const TITLE_LOOKUP_LIMIT = 50;
+/** Candidates listed by an ambiguous-title error. */
+const TITLE_CANDIDATES_MAX = 10;
+/** Characters that print as a plain space or nothing, so two titles differing only by them look equal. */
+const INVISIBLE_CHARS = /[\u00A0\u200B-\u200D\u2060\uFEFF]/;
+
+/** Pages (or blog posts) titled `title`: the exact-case matches, else the case-insensitive ones. */
+async function contentByTitle(
+  session: Session,
+  base: ContentBase,
+  title: string,
+  spaceId: string | undefined,
+): Promise<ApiTreeNode[]> {
+  const path =
+    spaceId === undefined
+      ? `/api/v2/${base}`
+      : `/api/v2/spaces/${encodeURIComponent(spaceId)}/${base}`;
+  const found = await session.http.request<ConfluenceCursorPage<ApiTreeNode>>({
+    method: "GET",
+    url: session.confluenceUrl(path),
+    query: { title, limit: TITLE_LOOKUP_LIMIT },
+  });
+  const exact = found.results.filter((node) => node.title === title);
+  if (exact.length > 0) {
+    return exact;
+  }
+  const lower = title.toLowerCase();
+  return found.results.filter((node) => node.title?.toLowerCase() === lower);
+}
+
+/** `atl page get <title>` found no page. */
+function titleNotFound(title: string, space: string | undefined): AtlError {
+  const scope = space === undefined ? "" : ` in space ${space}`;
+  const invisible = INVISIBLE_CHARS.test(title)
+    ? "; the title contains non-breaking or zero-width characters, which count as different from plain spaces"
+    : "";
+  return new AtlError(`No page titled "${title}"${scope}`, {
+    code: "not_found",
+    category: "api",
+    hint: `Titles match exactly (case-insensitive fallback only); search by words instead: atl search "${title}"${invisible}`,
+    next: [["atl", "search", title]],
+  });
+}
+
+/** The invocation with the title argument replaced by a page id, so each candidate is one command away. */
+function candidateArgv(ctx: CommandContext, input: string, id: string): NextCommand {
+  const argv = ctx.argv.includes(input)
+    ? ctx.argv.map((arg) => (arg === input ? id : arg))
+    : ["page", "get", id];
+  return ["atl", ...argv];
+}
+
+/** Several pages share the title (titles are unique per space only): list them with their spaces. */
+async function ambiguousTitle(
+  ctx: CommandContext,
+  session: Session,
+  input: string,
+  title: string,
+  matches: readonly ApiTreeNode[],
+): Promise<AtlError> {
+  const shown = matches.slice(0, TITLE_CANDIDATES_MAX);
+  const spaceIds = [...new Set(shown.map((node) => node.spaceId).filter((id) => id !== undefined))];
+  const keys = new Map<string, string>();
+  if (spaceIds.length > 0) {
+    const spaces = await session.http.request<ConfluenceCursorPage<ApiSpace>>({
+      method: "GET",
+      url: session.confluenceUrl("/api/v2/spaces"),
+      query: { ids: spaceIds, limit: spaceIds.length },
+    });
+    for (const space of spaces.results) {
+      if (space.key !== undefined) {
+        keys.set(space.id, space.key);
+      }
+    }
+  }
+  const lines = shown.map(
+    (node) =>
+      `${node.id}  ${keys.get(node.spaceId ?? "") ?? node.spaceId ?? "?"}  ${node.title ?? title}`,
+  );
+  const more = matches.length > shown.length ? `\n(and ${matches.length - shown.length} more)` : "";
+  return new AtlError(
+    `Title "${title}" matches ${matches.length} pages; pick one by id:\n${lines.join("\n")}${more}`,
+    {
+      code: "ambiguous_title",
+      category: "input",
+      hint: "Pass the page id, or narrow with --space <KEY>",
+      next: shown.map((node) => candidateArgv(ctx, input, node.id)),
+    },
+  );
+}
+
+/** Find the one page (or blog post with --type blogpost) with this title, optionally within a space. */
+async function openTitle(
+  ctx: CommandContext,
+  input: string,
+  title: string,
+  options: ContentRefOptions,
+): Promise<{ session: Session; target: ContentTarget }> {
+  const { space } = options;
+  const session = await openConfluence(ctx, space === undefined ? undefined : spaceSiteHint(space));
+  const base: ContentBase = options.type === "blogpost" ? "blogposts" : "pages";
+  const spaceId = space === undefined ? undefined : await resolveSpaceId(session, space);
+  const matches = await contentByTitle(session, base, title, spaceId);
+  const [match] = matches;
+  if (match === undefined) {
+    throw titleNotFound(title, space);
+  }
+  if (matches.length > 1) {
+    throw await ambiguousTitle(ctx, session, input, title, matches);
+  }
+  const target: ContentTarget = {
+    base,
+    id: match.id,
+    site: undefined,
+    cloudId: undefined,
+    version: undefined,
+    probe: false,
+  };
+  return { session, target };
+}
+
+/** How a page reference is read: `type` for bare ids, `space` to narrow a title. */
+export interface ContentRefOptions {
+  type?: "page" | "blogpost" | undefined;
+  space?: string | undefined;
+}
+
+/** The reference to repeat in follow-up commands: the id once a title has been resolved. */
+function resolvedRef(input: string, target: ContentTarget): string {
+  return pageTitleRef(input) === undefined ? input : target.id;
+}
+
 /**
- * Open the session for a page/blog post reference and resolve it. A legacy `/display/<SPACE>/<Title>`
- * link carries no id: the page is found by exact title in the space.
+ * Open the session for a page/blog post reference and resolve it. A title (anything that is not an
+ * id, ARI, or URL) is looked up by exact title; a legacy `/display/<SPACE>/<Title>` link carries no
+ * id and is looked up the same way in its space.
  */
 async function openContent(
   ctx: CommandContext,
   input: string,
-  type: "page" | "blogpost" | undefined,
+  options: ContentRefOptions,
 ): Promise<{ session: Session; target: ContentTarget }> {
+  const title = pageTitleRef(input);
+  if (title !== undefined) {
+    return await openTitle(ctx, input, title, options);
+  }
   const display = parseDisplayLink(input);
   if (display === undefined) {
-    const target = contentTarget(input, type);
+    const target = contentTarget(input, options.type);
     return { session: await openConfluence(ctx, target.site, target.cloudId), target };
   }
   const session = await openConfluence(ctx, display.site);
-  const found = await session.http.request<ConfluenceCursorPage<ApiTreeNode>>({
-    method: "GET",
-    url: session.confluenceUrl(
-      `/api/v2/spaces/${encodeURIComponent(await resolveSpaceId(session, display.spaceKey))}/pages`,
-    ),
-    query: { title: display.title, limit: 1 },
-  });
-  const page = found.results[0];
+  const spaceId = await resolveSpaceId(session, display.spaceKey);
+  const [page] = await contentByTitle(session, "pages", display.title, spaceId);
   if (page === undefined) {
     throw new AtlError(`No page titled "${display.title}" in space ${display.spaceKey}`, {
       code: "page_not_found",
@@ -326,10 +475,10 @@ export async function probeBase<T>(
 async function readContent<T>(
   ctx: CommandContext,
   input: string,
-  type: "page" | "blogpost" | undefined,
+  options: ContentRefOptions,
   run: (session: Session, target: ContentTarget) => Promise<T>,
 ): Promise<T> {
-  const { session, target } = await openContent(ctx, input, type);
+  const { session, target } = await openContent(ctx, input, options);
   return (await probeBase(target, (probed) => run(session, probed))).value;
 }
 
@@ -612,6 +761,7 @@ const PageGetFlags = Type.Object({
     }),
   ),
   type: TYPE_FLAG,
+  space: PAGE_SPACE_FLAG,
   grep: Type.Optional(
     Type.String({
       minLength: 1,
@@ -627,113 +777,6 @@ const PageGetFlags = Type.Object({
     }),
   ),
 });
-
-/** Case-insensitive line matcher for `page get --grep`; a bad pattern is an input error. */
-function grepPattern(source: string): RegExp {
-  try {
-    return new RegExp(source, "i");
-  } catch (error) {
-    throw inputError(
-      "invalid_regex",
-      `--grep is not a valid regular expression: ${error instanceof Error ? error.message : source}`,
-      "Patterns use JavaScript regex syntax; escape literal ( ) [ ] { } . * + ? | ^ $ with a backslash",
-    );
-  }
-}
-
-/**
- * Matching rows with `context` rows on each side, overlapping or adjacent ranges merged. A range
- * is `{from, to, hits, text}` (1-based, inclusive); `to` and `hits` are dropped for a single row,
- * which is then the hit. `text` is wrapped like a body (`bodyLines`) so no line exceeds the budget.
- */
-function grepRanges(
-  rows: readonly string[],
-  matcher: RegExp,
-  context: number,
-  markdown: boolean,
-): object[] {
-  const ranges: { from: number; to: number; hits: number[] }[] = [];
-  const size = Math.max(GREP_RANGE_LINES, 2 * context + 1);
-  rows.forEach((row, index) => {
-    if (!grepHit(row, matcher, markdown)) {
-      return;
-    }
-    const line = index + 1;
-    const end = Math.min(rows.length, line + context);
-    const last = ranges.at(-1);
-    if (last !== undefined && line - context <= last.to + 1 && end - last.from + 1 <= size) {
-      last.to = end;
-      last.hits.push(line);
-    } else {
-      ranges.push({ from: Math.max(1, line - context), to: end, hits: [line] });
-    }
-  });
-  return ranges.map(({ from, to, hits }) => {
-    const hitLines = new Set(hits);
-    const shown = rows
-      .slice(from - 1, to)
-      .flatMap((row, offset) => grepRow(row, hitLines.has(from + offset), matcher));
-    return {
-      from,
-      to: to === from ? undefined : to,
-      hits: to === from ? undefined : hits,
-      text: bodyLines(shown.join("\n")),
-    };
-  });
-}
-
-/** `page get --grep` prints at most this many ranges; `moreMatches` counts the rest. */
-const GREP_RANGE_CAP = 20;
-/** A range of several merged hits is split once it would pass this many lines (a hit's own context is never cut). */
-const GREP_RANGE_LINES = 20;
-/** A line longer than this is shown as excerpts around its hits (or cut, when it is context). */
-const GREP_LONG_LINE = 300;
-const GREP_EXCERPT_RADIUS = 100;
-const GREP_EXCERPTS_PER_LINE = 3;
-/** Markdown escapes punctuation with a backslash; a pattern may match the text without them. */
-const MARKDOWN_ESCAPE = /\\([!-/:-@[-`{-~])/g;
-
-/** Does the pattern match the row, or (markdown) the row with its backslash escapes removed? */
-function grepHit(row: string, matcher: RegExp, markdown: boolean): boolean {
-  return (
-    matcher.test(row) ||
-    (markdown && row.includes("\\") && matcher.test(row.replaceAll(MARKDOWN_ESCAPE, "$1")))
-  );
-}
-
-/** A row as shown in a range: whole when short, else excerpts around the hits or its first characters. */
-function grepRow(row: string, hit: boolean, matcher: RegExp): string[] {
-  if (row.length <= GREP_LONG_LINE) {
-    return [row];
-  }
-  const windows: { start: number; end: number }[] = [];
-  let more = 0;
-  if (hit) {
-    for (const found of row.matchAll(new RegExp(matcher.source, "gi"))) {
-      const start = Math.max(0, found.index - GREP_EXCERPT_RADIUS);
-      const end = Math.min(
-        row.length,
-        found.index + Math.min(found[0].length, GREP_EXCERPT_RADIUS) + GREP_EXCERPT_RADIUS,
-      );
-      const last = windows.at(-1);
-      if (last !== undefined && start <= last.end) {
-        last.end = Math.max(last.end, end);
-      } else if (windows.length < GREP_EXCERPTS_PER_LINE) {
-        windows.push({ start, end });
-      } else {
-        more++;
-      }
-    }
-  }
-  if (windows.length === 0) {
-    return [`${row.slice(0, GREP_LONG_LINE)}…`];
-  }
-  const shown = windows.map(
-    ({ start, end }) =>
-      `${start > 0 ? "…" : ""}${row.slice(start, end)}${end < row.length ? "…" : ""}`,
-  );
-  return more === 0 ? shown : [...shown, `… ${more} more matches in this line`];
-}
 
 /**
  * Compact `parent` of a page: id and title from one extra GET. A parent that is not a page
@@ -782,11 +825,12 @@ export const pageGet = defineCommand({
   ],
   summary:
     "Get a page or blog post (current or --version N) with its body, parent {id, title} and url; --grep <regex> returns only matching lines; --format view returns the whole rendered HTML, not per-macro",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PageGetFlags,
   sideEffects: "none",
   examples: [
     "atl page get 123456",
+    'atl page get "Release Process" --space ENG',
     "atl page get https://acme.atlassian.net/wiki/spaces/ENG/pages/123456/Title --format storage",
     "atl page get 123456 --version 3",
     "atl page get 123456 --format view",
@@ -805,7 +849,7 @@ export const pageGet = defineCommand({
       );
     }
     const matcher = flags.grep === undefined ? undefined : grepPattern(flags.grep);
-    return await readContent(ctx, input.args.page ?? "", flags.type, async (session, target) => {
+    return await readContent(ctx, input.args.page ?? "", flags, async (session, target) => {
       const format = flags.format ?? "md";
       // A `pageVersion=` link names a version; an explicit --version wins.
       const version = flags.version ?? target.version;
@@ -817,7 +861,11 @@ export const pageGet = defineCommand({
           query: { "body-format": BODY_FORMATS[format], version },
         });
       } catch (error) {
-        throw missingVersion(error, version, versionsArgv(input.args.page ?? "", target.base));
+        throw missingVersion(
+          error,
+          version,
+          versionsArgv(resolvedRef(input.args.page ?? "", target), target.base),
+        );
       }
       if (ctx.full) {
         return page;
@@ -913,6 +961,7 @@ const PageTreeFlags = Type.Object({
       description: "Levels below the page (1-5, default 5)",
     }),
   ),
+  space: PAGE_SPACE_FLAG,
   ...PAGING_FLAGS,
 });
 
@@ -920,12 +969,15 @@ export const pageTree = defineCommand({
   name: "page.tree",
   mcpTools: ["getConfluencePageDescendants", "getConfluenceContentDescendants"],
   summary: "List descendants of a page, depth-limited; items omit url (see page get)",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PageTreeFlags,
   sideEffects: "none",
   examples: ["atl page tree 123456 --depth 2", "atl page tree 123456 --all"],
   async run(ctx, input) {
-    const { session, target } = await openContent(ctx, input.args.page ?? "", "page");
+    const { session, target } = await openContent(ctx, input.args.page ?? "", {
+      type: "page",
+      space: input.flags.space,
+    });
     pagesOnly(target.base, "page tree");
     // The API returns 2 levels when no depth is sent.
     const depth = input.flags.depth ?? TREE_DEFAULT_DEPTH;
@@ -958,17 +1010,20 @@ export const pageTree = defineCommand({
   },
 });
 
-const PagingOnly = Type.Object({ ...PAGING_FLAGS });
+const PagingOnly = Type.Object({ space: PAGE_SPACE_FLAG, ...PAGING_FLAGS });
 
 export const pageChildren = defineCommand({
   name: "page.children",
   summary: "List the direct children of a page; url is <site>/wiki/spaces/<KEY>/pages/<id>",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PagingOnly,
   sideEffects: "none",
   examples: ["atl page children 123456"],
   async run(ctx, input) {
-    const { session, target } = await openContent(ctx, input.args.page ?? "", "page");
+    const { session, target } = await openContent(ctx, input.args.page ?? "", {
+      type: "page",
+      space: input.flags.space,
+    });
     pagesOnly(target.base, "page children");
     const paged = await listV2<ApiTreeNode>(
       session,
@@ -979,65 +1034,55 @@ export const pageChildren = defineCommand({
   },
 });
 
-const ContentListFlags = Type.Object({ type: TYPE_FLAG, ...PAGING_FLAGS });
+const ContentListFlags = Type.Object({ type: TYPE_FLAG, space: PAGE_SPACE_FLAG, ...PAGING_FLAGS });
 
 export const pageVersions = defineCommand({
   name: "page.versions",
   mcpTools: ["listConfluenceContentVersions"],
   summary: "List versions of a page or blog post; author is a display name",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: ContentListFlags,
   sideEffects: "none",
   examples: ["atl page versions 123456 --limit 5"],
   async run(ctx, input) {
-    return await readContent(
-      ctx,
-      input.args.page ?? "",
-      input.flags.type,
-      async (session, target) => {
-        const paged = await listV2<Version>(
-          session,
-          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/versions`,
-          input.flags,
-        );
-        if (ctx.full) {
-          return paged;
-        }
-        const names = await displayNames(
-          session,
-          paged.items.map((version) => version.authorId),
-        );
-        return { ...paged, items: paged.items.map((version) => listVersion(version, names)) };
-      },
-    );
+    return await readContent(ctx, input.args.page ?? "", input.flags, async (session, target) => {
+      const paged = await listV2<Version>(
+        session,
+        `/api/v2/${target.base}/${encodeURIComponent(target.id)}/versions`,
+        input.flags,
+      );
+      if (ctx.full) {
+        return paged;
+      }
+      const names = await displayNames(
+        session,
+        paged.items.map((version) => version.authorId),
+      );
+      return { ...paged, items: paged.items.map((version) => listVersion(version, names)) };
+    });
   },
 });
 
 export const pageLabels = defineCommand({
   name: "page.labels",
   summary: "List labels on a page or blog post",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: ContentListFlags,
   sideEffects: "none",
   examples: ["atl page labels 123456"],
   async run(ctx, input) {
-    return await readContent(
-      ctx,
-      input.args.page ?? "",
-      input.flags.type,
-      async (session, target) => {
-        const paged = await listV2<ApiLabel>(
-          session,
-          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/labels`,
-          input.flags,
-        );
-        return mapPaged(paged, ctx.full, (label) => ({
-          id: label.id,
-          name: label.name,
-          prefix: label.prefix === "global" ? undefined : label.prefix,
-        }));
-      },
-    );
+    return await readContent(ctx, input.args.page ?? "", input.flags, async (session, target) => {
+      const paged = await listV2<ApiLabel>(
+        session,
+        `/api/v2/${target.base}/${encodeURIComponent(target.id)}/labels`,
+        input.flags,
+      );
+      return mapPaged(paged, ctx.full, (label) => ({
+        id: label.id,
+        name: label.name,
+        prefix: label.prefix === "global" ? undefined : label.prefix,
+      }));
+    });
   },
 });
 
@@ -1059,6 +1104,7 @@ const AncestorsFlags = Type.Object({
   limit: Type.Optional(
     Type.Integer({ minimum: 1, description: "Keep only the nearest N ancestors" }),
   ),
+  space: PAGE_SPACE_FLAG,
 });
 
 export const pageAncestors = defineCommand({
@@ -1066,12 +1112,15 @@ export const pageAncestors = defineCommand({
   mcpTools: ["getConfluenceContentAncestors"],
   summary:
     "List a page's ancestors, root first (CQL expand: the v2 ancestors endpoint needs a scope the token lacks)",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: AncestorsFlags,
   sideEffects: "none",
   examples: ["atl page ancestors 123456", "atl page ancestors 123456 --limit 1"],
   async run(ctx, input) {
-    const { session, target } = await openContent(ctx, input.args.page ?? "", "page");
+    const { session, target } = await openContent(ctx, input.args.page ?? "", {
+      type: "page",
+      space: input.flags.space,
+    });
     pagesOnly(target.base, "page ancestors");
     if (!/^\d+$/.test(target.id)) {
       throw new AtlError(`${target.id} is not a numeric page id`, {
@@ -1316,6 +1365,7 @@ const PageDiffFlags = Type.Object({
     Type.Integer({ minimum: 0, description: "Unchanged lines around each change (default 3)" }),
   ),
   type: TYPE_FLAG,
+  space: PAGE_SPACE_FLAG,
 });
 
 export const pageDiff = defineCommand({
@@ -1323,7 +1373,7 @@ export const pageDiff = defineCommand({
   mcpTools: ["diffConfluenceContentVersions"],
   summary:
     "Unified diff of two versions of a page or blog post, computed locally; default: previous vs current",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PageDiffFlags,
   sideEffects: "none",
   examples: [
@@ -1333,9 +1383,9 @@ export const pageDiff = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    return await readContent(ctx, input.args.page ?? "", flags.type, async (session, target) => {
+    return await readContent(ctx, input.args.page ?? "", flags, async (session, target) => {
       const storage = flags.format === "storage";
-      const versions = versionsArgv(input.args.page ?? "", target.base);
+      const versions = versionsArgv(resolvedRef(input.args.page ?? "", target), target.base);
       const newer = await versionText(session, target, flags.to, storage, versions);
       const to = newer.page.version?.number ?? flags.to ?? 1;
       const from = flags.from ?? to - 1;
@@ -1399,6 +1449,7 @@ const PermissionsListFlags = Type.Object({
     Type.String({ description: "Only grants to this account or group id" }),
   ),
   type: TYPE_FLAG,
+  space: PAGE_SPACE_FLAG,
   ...PAGING_FLAGS,
 });
 
@@ -1407,7 +1458,7 @@ export const pagePermissionsList = defineCommand({
   mcpTools: ["getConfluenceContentPermissions"],
   summary:
     "List the explicit permission grants on a page or blog post; groups show their id (names need a scope the token lacks)",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PermissionsListFlags,
   sideEffects: "none",
   examples: [
@@ -1416,7 +1467,7 @@ export const pagePermissionsList = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    return await readContent(ctx, input.args.page ?? "", flags.type, async (session, target) => {
+    return await readContent(ctx, input.args.page ?? "", flags, async (session, target) => {
       const paged = await listV2<ApiPermission>(
         session,
         `/api/v2/${target.base}/${encodeURIComponent(target.id)}/permissions`,
@@ -1451,35 +1502,30 @@ export const pagePermissionsList = defineCommand({
   },
 });
 
-const TypeOnly = Type.Object({ type: TYPE_FLAG });
+const TypeOnly = Type.Object({ type: TYPE_FLAG, space: PAGE_SPACE_FLAG });
 
 export const pageRestriction = defineCommand({
   name: "page.restriction",
   mcpTools: ["getConfluenceContentRestrictionState"],
   summary: "Show the general access state of a page or blog post (OPEN or restricted)",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: TypeOnly,
   sideEffects: "none",
   examples: ["atl page restriction 123456"],
   async run(ctx, input) {
-    return await readContent(
-      ctx,
-      input.args.page ?? "",
-      input.flags.type,
-      async (session, target) => {
-        const state = await session.http.request<Record<string, unknown>>({
-          method: "GET",
-          url: session.confluenceUrl(
-            `/api/v2/${target.base}/${encodeURIComponent(target.id)}/restriction-state`,
-          ),
-        });
-        if (ctx.full) {
-          return state;
-        }
-        const { _links: _omitted, ...rest } = state;
-        return rest;
-      },
-    );
+    return await readContent(ctx, input.args.page ?? "", input.flags, async (session, target) => {
+      const state = await session.http.request<Record<string, unknown>>({
+        method: "GET",
+        url: session.confluenceUrl(
+          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/restriction-state`,
+        ),
+      });
+      if (ctx.full) {
+        return state;
+      }
+      const { _links: _omitted, ...rest } = state;
+      return rest;
+    });
   },
 });
 
@@ -1487,33 +1533,28 @@ export const pageOperations = defineCommand({
   name: "page.operations",
   summary:
     "List what you may do on a page or blog post (read, update, delete, ...; create:<type> for children)",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: TypeOnly,
   sideEffects: "none",
   examples: ["atl page operations 123456"],
   async run(ctx, input) {
-    return await readContent(
-      ctx,
-      input.args.page ?? "",
-      input.flags.type,
-      async (session, target) => {
-        const found = await session.http.request<{ operations?: ApiOperation[] }>({
-          method: "GET",
-          url: session.confluenceUrl(
-            `/api/v2/${target.base}/${encodeURIComponent(target.id)}/operations`,
-          ),
-        });
-        if (ctx.full) {
-          return found;
-        }
-        return {
-          operations: operationNames(
-            found.operations,
-            target.base === "blogposts" ? "blogpost" : "page",
-          ),
-        };
-      },
-    );
+    return await readContent(ctx, input.args.page ?? "", input.flags, async (session, target) => {
+      const found = await session.http.request<{ operations?: ApiOperation[] }>({
+        method: "GET",
+        url: session.confluenceUrl(
+          `/api/v2/${target.base}/${encodeURIComponent(target.id)}/operations`,
+        ),
+      });
+      if (ctx.full) {
+        return found;
+      }
+      return {
+        operations: operationNames(
+          found.operations,
+          target.base === "blogposts" ? "blogpost" : "page",
+        ),
+      };
+    });
   },
 });
 
@@ -1526,6 +1567,7 @@ interface ApiProperty {
 const PropertiesFlags = Type.Object({
   key: Type.Optional(Type.String({ description: "Only the property with this key" })),
   type: TYPE_FLAG,
+  space: PAGE_SPACE_FLAG,
   ...PAGING_FLAGS,
 });
 
@@ -1533,13 +1575,13 @@ export const pageProperties = defineCommand({
   name: "page.properties",
   summary:
     "List content properties (key and JSON value as stored) of a page or blog post; apps keep state here",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: PropertiesFlags,
   sideEffects: "none",
   examples: ["atl page properties 123456", "atl page properties 123456 --key editor"],
   async run(ctx, input) {
     const { flags } = input;
-    return await readContent(ctx, input.args.page ?? "", flags.type, async (session, target) => {
+    return await readContent(ctx, input.args.page ?? "", flags, async (session, target) => {
       const paged = await listV2<ApiProperty>(
         session,
         `/api/v2/${target.base}/${encodeURIComponent(target.id)}/properties`,
@@ -2075,6 +2117,7 @@ const CommentListFlags = Type.Object({
   ),
   format: ADF_FORMAT_FLAG,
   type: TYPE_FLAG,
+  space: PAGE_SPACE_FLAG,
   ...PAGING_FLAGS,
 });
 
@@ -2157,7 +2200,7 @@ export const commentList = defineCommand({
   ],
   summary:
     "List footer, inline or --kind all comments on a page or blog post; items omit pageId and url (see comment get). --kind all lists footer then inline, each item tagged kind; --limit applies to each kind and nextCursor resumes both",
-  args: [{ name: "page", description: "Page id, URL, tiny link, or ARI", required: true }],
+  args: [{ name: "page", description: PAGE_ARG, required: true }],
   flags: CommentListFlags,
   sideEffects: "none",
   examples: [
@@ -2181,7 +2224,7 @@ export const commentList = defineCommand({
       kind === "all"
         ? allKindsCursor(flags.cursor)
         : { footer: flags.cursor, inline: flags.cursor };
-    return await readContent(ctx, input.args.page ?? "", flags.type, async (session, target) => {
+    return await readContent(ctx, input.args.page ?? "", flags, async (session, target) => {
       const budget: ReplyBudget = { requests: MAX_REPLY_REQUESTS, truncated: false };
       const batches: {
         kind: CommentKind;

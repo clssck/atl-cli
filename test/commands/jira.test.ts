@@ -166,6 +166,15 @@ async function run(
   return context.full ? result : prune(result);
 }
 
+/** An ADF document with one paragraph per text. */
+function paragraphs(...texts: string[]): Record<string, unknown> {
+  return {
+    type: "doc",
+    version: 1,
+    content: texts.map((text) => ({ type: "paragraph", content: [{ type: "text", text }] })),
+  };
+}
+
 const doc = (text: string) => ({
   type: "doc",
   version: 1,
@@ -537,6 +546,221 @@ describe("issue.get", () => {
     const result = recordOf(await run("issue.get", { issue: "ABC-123" }));
     expect(calls.map((c) => c.path)).not.toContain("/rest/api/3/issue/ABC-123/comment");
     expect("comments" in result).toBe(false);
+  });
+
+  describe("--grep", () => {
+    const withDescription = {
+      ...ISSUE,
+      fields: {
+        ...ISSUE.fields,
+        description: paragraphs("Intro", "Contact the Vendor about it", "Closing"),
+      },
+    };
+    const comment = (id: string, author: string, text: string) => ({
+      id,
+      author: { accountId: `acc-${id}`, displayName: author },
+      created: "2026-10-03T09:00:00.000+0000",
+      updated: "2026-10-03T09:00:00.000+0000",
+      body: paragraphs(text),
+    });
+
+    test("returns the header and only matching description and comment ranges, comments tagged", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": withDescription,
+        "/rest/api/3/issue/ABC-123/comment": sequence(
+          {
+            startAt: 0,
+            total: 3,
+            comments: [comment("1", "Ann", "vendor replied"), comment("2", "Bob", "unrelated")],
+          },
+          { startAt: 2, total: 3, comments: [comment("3", "Cy", "second VENDOR note")] },
+        ),
+      });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { grep: "vendor", context: 0 }),
+      );
+      const commentCalls = calls.filter((c) => c.path === "/rest/api/3/issue/ABC-123/comment");
+      expect(commentCalls.map((c) => c.query.get("startAt"))).toEqual(["0", "2"]);
+      expect(result).toMatchObject({
+        key: "ABC-123",
+        summary: "Login fails on Safari",
+        matches: 3,
+        commentsSearched: 3,
+        description: { ranges: [{ text: ["Contact the Vendor about it"] }] },
+        comments: [
+          {
+            id: "1",
+            author: "Ann",
+            created: "2026-10-03T09:00:00+0000",
+            ranges: [{ text: ["vendor replied"] }],
+          },
+          { id: "3", author: "Cy", ranges: [{ text: ["second VENDOR note"] }] },
+        ],
+      });
+      expect(Array.isArray(result.description)).toBe(false);
+      expect(JSON.stringify(result)).not.toContain("Closing");
+      expect(JSON.stringify(result)).not.toContain("unrelated");
+    });
+
+    test("--context adds surrounding lines and --comments narrows the comments searched", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": withDescription,
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 9,
+          comments: [comment("9", "Ann", "vendor here")],
+        },
+      });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { grep: "vendor", context: 2, comments: 1 }),
+      );
+      const commentCall = calls.find((c) => c.path === "/rest/api/3/issue/ABC-123/comment");
+      expect(commentCall?.query.get("maxResults")).toBe("1");
+      expect(result.commentsSearched).toBe(1);
+      const description = recordOf(result.description);
+      const [range] = Array.isArray(description.ranges) ? description.ranges : [];
+      expect(JSON.stringify(range)).toContain("Intro");
+      expect(JSON.stringify(range)).toContain("Closing");
+    });
+
+    test("ranges are capped at 20 with moreMatches counting the rest", async () => {
+      const many = paragraphs(...Array.from({ length: 30 }, (_, i) => `vendor ${i}`));
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": scrum({ description: many }),
+        "/rest/api/3/issue/ABC-123/comment": { startAt: 0, total: 0, comments: [] },
+      });
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }, { grep: "vendor" }));
+      const description = recordOf(result.description);
+      expect(result.matches).toBe(30);
+      expect(result.moreMatches).toBe(10);
+      expect(Array.isArray(description.ranges) ? description.ranges.length : 0).toBe(20);
+    });
+
+    test("no hit prints matches 0 without description or comments", async () => {
+      respond({
+        "/rest/api/3/field": FIELDS,
+        "/rest/api/3/issue/ABC-123": ISSUE,
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 1,
+          comments: [comment("1", "Ann", "hello")],
+        },
+      });
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }, { grep: "nomatch" }));
+      expect(result.matches).toBe(0);
+      expect(result.commentsSearched).toBe(1);
+      expect("description" in result).toBe(false);
+      expect("comments" in result).toBe(false);
+    });
+
+    test("bad usage is an input error before any request", async () => {
+      respond({ "/rest/api/3/issue/ABC-123": ISSUE });
+      expect((await failure(run("issue.get", { issue: "ABC-123" }, { grep: "(" }))).code).toBe(
+        "invalid_regex",
+      );
+      expect((await failure(run("issue.get", { issue: "ABC-123" }, { context: 1 }))).code).toBe(
+        "invalid_flag_combination",
+      );
+      expect(
+        (await failure(run("issue.get", { issue: "ABC-123" }, { grep: "x" }, { full: true }))).code,
+      ).toBe("invalid_flag_combination");
+      expect(
+        (await failure(run("issue.get", { issue: "ABC-123" }, { grep: "x", format: "adf" }))).code,
+      ).toBe("invalid_flag_combination");
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("worklog field", () => {
+    const worklogField = {
+      startAt: 0,
+      maxResults: 20,
+      total: 3,
+      worklogs: [
+        {
+          id: "1",
+          author: { accountId: "a", displayName: "Ada" },
+          started: "2026-10-01T09:00:00.000+0000",
+          timeSpent: "2h",
+          timeSpentSeconds: 7200,
+          comment: doc("long note"),
+        },
+        {
+          id: "2",
+          author: { accountId: "b" },
+          started: "2026-10-02T09:00:00.000+0000",
+          timeSpent: "1h 30m",
+          timeSpentSeconds: 5400,
+        },
+      ],
+    };
+
+    test("--issue-fields worklog also requests timespent and reports the issue total, not the shown sum", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123": scrum({ worklog: worklogField, timespent: 16200 }),
+      });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { issueFields: "summary,worklog" }),
+      );
+      expect(calls.at(-1)?.query.get("fields")).toBe("summary,worklog,timespent");
+      expect(result.worklog).toEqual({
+        total: "4h 30m",
+        totalSeconds: 16200,
+        entries: [
+          { author: "Ada", started: "2026-10-01T09:00:00+0000", timeSpent: "2h" },
+          { author: "b", started: "2026-10-02T09:00:00+0000", timeSpent: "1h 30m" },
+        ],
+        more: 1,
+      });
+      expect("timespent" in result).toBe(false);
+    });
+
+    test("jql items compact it too; --full keeps the raw field", async () => {
+      respond({
+        "/rest/api/3/search/jql": {
+          issues: [scrum({ worklog: worklogField, timespent: 16200 })],
+          isLast: true,
+        },
+      });
+      const listed = await run("jql", { query: "x = 1" }, { issueFields: "worklog" });
+      expect(calls.at(-1)?.query.get("fields")).toBe("worklog,timespent");
+      expect(recordOf(itemsOf(listed)[0]?.worklog).total).toBe("4h 30m");
+
+      respond({ "/rest/api/3/issue/ABC-123": scrum({ worklog: worklogField }) });
+      const full = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { issueFields: "worklog" }, { full: true }),
+      );
+      expect(recordOf(recordOf(full.fields).worklog).worklogs).toHaveLength(2);
+    });
+
+    test("without timespent only the shown entries are summed, under totalOfShown", async () => {
+      respond({ "/rest/api/3/issue/ABC-123": scrum({ worklog: worklogField }) });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { issueFields: "worklog" }),
+      );
+      expect(result.worklog).toMatchObject({
+        totalOfShown: "3h 30m",
+        totalSecondsOfShown: 12600,
+        more: 1,
+      });
+      expect("total" in recordOf(result.worklog)).toBe(false);
+    });
+
+    test("an issue without time logged reads 0m", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123": scrum({
+          worklog: { startAt: 0, total: 0, worklogs: [] },
+          timespent: null,
+        }),
+      });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { issueFields: "worklog" }),
+      );
+      expect(result.worklog).toEqual({ total: "0m", totalSeconds: 0 });
+    });
   });
 
   test("a browse URL selects its site and key", async () => {

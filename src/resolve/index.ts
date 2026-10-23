@@ -6,6 +6,7 @@ export {
   parseDisplayLink,
   parseJiraRef,
   parseSite,
+  pageTitleRef,
   parseSpaceRef,
 } from "./ids.ts";
 export type {

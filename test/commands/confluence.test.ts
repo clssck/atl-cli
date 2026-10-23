@@ -1305,7 +1305,7 @@ describe("page.ancestors", () => {
   });
 
   test("a non-numeric id is rejected before any request", async () => {
-    const error = await rejection(run(pageAncestors, { page: "x:y" }));
+    const error = await rejection(run(pageAncestors, { page: "ari:cloud:confluence::page/abc" }));
     expect(error.category).toBe("input");
     expect(calls).toEqual([]);
   });
@@ -1941,7 +1941,123 @@ describe("references: versions, legacy links and sites", () => {
     expect(error.exitCode).toBe(2);
     expect(error.next).toEqual([["atl", "space", "pages", "ENG", "--title", "Nope"]]);
   });
+});
 
+describe("page titles as references", () => {
+  const TITLED = { id: "111", title: "Runbook", spaceId: "1" };
+  /** A page without a parent, so a read is one request. */
+  const ROOT = { ...PAGE, parentId: undefined };
+
+  test("a unique title resolves to its page without touching the id path", async () => {
+    route("/api/v2/pages", { results: [TITLED] });
+    route("/api/v2/pages/111", { ...ROOT, id: "111" });
+    const result = await run(pageGet, { page: "Runbook" });
+    expect(result).toMatchObject({ id: "111" });
+    expect(calls[0]?.url.pathname).toEndWith("/api/v2/pages");
+    expect(calls[0]?.url.searchParams.get("title")).toBe("Runbook");
+    expect(calls.map((call) => call.url.pathname.split("/api/v2")[1])).toEqual([
+      "/pages",
+      "/pages/111",
+    ]);
+  });
+
+  test("an exact-case title wins over case variants; a case variant alone still matches", async () => {
+    route("/api/v2/pages", {
+      results: [
+        { id: "222", title: "runbook", spaceId: "1" },
+        { id: "111", title: "Runbook", spaceId: "1" },
+      ],
+    });
+    route("/api/v2/pages/111", { ...ROOT, id: "111" });
+    expect(await run(pageGet, { page: "Runbook" })).toMatchObject({ id: "111" });
+    route("/api/v2/pages", { results: [{ id: "222", title: "runbook", spaceId: "1" }] });
+    route("/api/v2/pages/222", { ...ROOT, id: "222" });
+    expect(await run(pageGet, { page: "RUNBOOK" })).toMatchObject({ id: "222" });
+  });
+
+  test("a title in several spaces is ambiguous_title listing id, space key and title", async () => {
+    route("/api/v2/pages", {
+      results: [TITLED, { id: "222", title: "Runbook", spaceId: "2" }],
+    });
+    route("/api/v2/spaces", {
+      results: [
+        { id: "1", key: "ENG" },
+        { id: "2", key: "OPS" },
+      ],
+    });
+    const error = await rejection(
+      run(
+        pageGet,
+        { page: "Runbook" },
+        {},
+        ctx({ argv: ["page", "get", "Runbook", "--fields", "id"] }),
+      ),
+    );
+    expect(error.code).toBe("ambiguous_title");
+    expect(error.category).toBe("input");
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toContain("111  ENG  Runbook");
+    expect(error.message).toContain("222  OPS  Runbook");
+    expect(error.next).toEqual([
+      ["atl", "page", "get", "111", "--fields", "id"],
+      ["atl", "page", "get", "222", "--fields", "id"],
+    ]);
+  });
+
+  test("--space looks the title up inside that space", async () => {
+    route("/api/v2/spaces", { results: [{ id: "1", key: "ENG" }] });
+    route("/api/v2/spaces/1/pages", { results: [TITLED] });
+    route("/api/v2/pages/111", { ...ROOT, id: "111" });
+    expect(await run(pageGet, { page: "Runbook" }, { space: "ENG" })).toMatchObject({ id: "111" });
+    expect(calls.some((call) => call.url.pathname.endsWith("/spaces/1/pages"))).toBe(true);
+  });
+
+  test("no match is not_found (exit 2) with a search hint", async () => {
+    route("/api/v2/pages", { results: [] });
+    const error = await rejection(run(pageGet, { page: "Nope" }));
+    expect(error.code).toBe("not_found");
+    expect(error.exitCode).toBe(2);
+    expect(error.hint).toContain('atl search "Nope"');
+  });
+
+  test("a title with non-breaking spaces says so in the not-found hint", async () => {
+    route("/api/v2/pages", { results: [] });
+    const error = await rejection(run(pageGet, { page: "Run\u00A0book" }));
+    expect(error.code).toBe("not_found");
+    expect(error.hint).toContain("non-breaking");
+  });
+
+  test("--type blogpost looks the title up among blog posts", async () => {
+    route("/api/v2/blogposts", { results: [{ id: "555", title: "Weekly", spaceId: "1" }] });
+    route("/api/v2/blogposts/555", { ...ROOT, id: "555" });
+    expect(await run(pageGet, { page: "Weekly" }, { type: "blogpost" })).toMatchObject({
+      id: "555",
+    });
+  });
+
+  test("a numeric id is read directly, never looked up by title", async () => {
+    route("/api/v2/pages/123456", ROOT);
+    await run(pageGet, { page: "123456" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url.pathname).toEndWith("/api/v2/pages/123456");
+  });
+
+  test("other page commands take titles too", async () => {
+    route("/api/v2/pages", { results: [TITLED] });
+    route("/api/v2/pages/111/versions", { results: [] });
+    route("/api/v2/pages/111/direct-children", { results: [] });
+    await run(pageVersions, { page: "Runbook" });
+    await run(pageChildren, { page: "Runbook" });
+    expect(calls.map((call) => call.url.pathname.split("/api/v2")[1])).toEqual([
+      "/pages",
+      "/pages/111/versions",
+      "/pages",
+      "/pages/111/direct-children",
+    ]);
+  });
+});
+
+describe("references: ARIs of other sites", () => {
   test("an ARI of another site is not read on the default site", async () => {
     route("/oauth/token/accessible-resources", [
       {

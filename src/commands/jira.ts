@@ -1,5 +1,5 @@
 import { Type } from "../core/schema.ts";
-import type { AdfDoc } from "../adf/index.ts";
+import { adfToMarkdown, parseAdfBody, type AdfDoc } from "../adf/index.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
 import { AtlError, inputError } from "../core/errors.ts";
 import type { FetchLike, Query } from "../core/http.ts";
@@ -26,6 +26,7 @@ import {
   type PagingFlags,
 } from "./common.ts";
 import { snippet } from "./confluence.ts";
+import { GREP_RANGE_CAP, grepPattern, grepRanges } from "./grep.ts";
 
 /** Test seam: a fake `fetch` used by every Jira command when set. */
 export const jiraDeps: { fetch?: FetchLike | undefined } = {};
@@ -250,6 +251,56 @@ function fieldValue(value: unknown): unknown {
   return recordLabel(value) ?? value;
 }
 
+/** Seconds as `3h 30m`: hours and minutes only, so no site's workday length is assumed. */
+function humanDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [hours > 0 ? `${hours}h` : undefined, rest > 0 || hours === 0 ? `${rest}m` : undefined]
+    .filter((part) => part !== undefined)
+    .join(" ");
+}
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * The `worklog` issue field (`{startAt, maxResults, total, worklogs: [...]}`) as
+ * `{total, totalSeconds, entries: [{author, started, timeSpent}], more?}`. The API embeds at most
+ * 20 entries; `more` counts those beyond them (`atl issue worklogs` lists them all). `total` is
+ * the issue's own logged time (`timespent`, null when nothing is logged), so it covers every
+ * entry. Without `timespent` only the shown entries can be summed, and that figure is named
+ * `totalOfShown` / `totalSecondsOfShown` instead.
+ */
+function compactWorklog(value: unknown, timespent: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.worklogs)) {
+    return fieldValue(value);
+  }
+  const worklogs: unknown[] = value.worklogs;
+  const entries = worklogs.filter(isRecord);
+  const shownSeconds = entries.reduce(
+    (sum, w) => sum + (typeof w.timeSpentSeconds === "number" ? w.timeSpentSeconds : 0),
+    0,
+  );
+  const count = typeof value.total === "number" ? value.total : entries.length;
+  const wholeSeconds =
+    typeof timespent === "number" ? timespent : timespent === null ? 0 : undefined;
+  return {
+    ...(wholeSeconds === undefined
+      ? { totalOfShown: humanDuration(shownSeconds), totalSecondsOfShown: shownSeconds }
+      : { total: humanDuration(wholeSeconds), totalSeconds: wholeSeconds }),
+    entries: entries.map((w) => ({
+      author: isRecord(w.author)
+        ? (nonEmptyText(w.author.displayName) ?? nonEmptyText(w.author.accountId))
+        : undefined,
+      started: shortTs(nonEmptyText(w.started)),
+      timeSpent: nonEmptyText(w.timeSpent),
+    })),
+    more: count > entries.length ? count - entries.length : undefined,
+  };
+}
+
 /**
  * Compact issue shape, one for `jql` items and `issue get`. `list` gives a minimal item (people as
  * display names, no id/url/statusCategory) containing only the fields that were requested;
@@ -267,10 +318,15 @@ export function compactIssue(
   names: ReadonlyMap<string, string> = new Map(),
 ): Record<string, unknown> {
   const f = issue.fields ?? {};
+  const hasWorklog = f.worklog !== undefined;
   const extraFields = Object.fromEntries(
     Object.entries(f)
-      .filter(([name]) => !COMPACT_FIELD_KEYS.has(name))
-      .map(([name, value]) => [names.get(name) ?? name, fieldValue(value)]),
+      // With a worklog, `timespent` is its `totalSeconds`.
+      .filter(([name]) => !COMPACT_FIELD_KEYS.has(name) && !(hasWorklog && name === "timespent"))
+      .map(([name, value]) => [
+        names.get(name) ?? name,
+        name === "worklog" ? compactWorklog(value, f.timespent) : fieldValue(value),
+      ]),
   );
   const parent = f.parent ?? undefined;
   return {
@@ -320,6 +376,10 @@ async function resolveRequested(
     if (field.id.toLowerCase() !== entry.trim().toLowerCase() && field.name !== undefined) {
       names.set(field.id, field.name);
     }
+  }
+  // The worklog field carries at most 20 entries; `timespent` is the issue's whole logged total.
+  if (fields.includes("worklog") && !fields.includes("timespent") && !fields.includes("*all")) {
+    fields.push("timespent");
   }
   return { fields, names };
 }
@@ -403,9 +463,85 @@ export function projectKey(input: string): string {
 // issue.*
 // ---------------------------------------------------------------------------
 
+/** The newest `limit` comments of an issue, or all of them (up to the safety cap) without a limit. */
+async function fetchComments(
+  session: Session,
+  key: string,
+  limit: number | undefined,
+): Promise<JiraComment[]> {
+  const paged = await paginateJiraOffset(
+    { limit, all: limit === undefined, defaultLimit: SAFETY_CAP, maxPageSize: 100 },
+    (page: CommentPage) => page.comments ?? [],
+    ({ startAt, pageSize }) =>
+      session.http.request<CommentPage>({
+        method: "GET",
+        url: session.jiraUrl(`/rest/api/3/issue/${key}/comment`),
+        query: { orderBy: "-created", startAt, maxResults: pageSize },
+      }),
+  );
+  return paged.items;
+}
+
+/** A description or comment body as markdown rows, the lines `--grep` searches. */
+function markdownRows(doc: AdfDoc | null | undefined): string[] {
+  const markdown = doc === null || doc === undefined ? "" : adfToMarkdown(parseAdfBody(doc));
+  return markdown === "" ? [] : markdown.split("\n");
+}
+
+/**
+ * `issue get --grep`: the issue header plus only the matching ranges of its description and
+ * comments. `matches` counts every range found; at most `GREP_RANGE_CAP` are shown, description
+ * first, and `moreMatches` counts the rest. A comment is tagged with id, author and created.
+ */
+function grepIssue(
+  header: Record<string, unknown>,
+  description: AdfDoc | null | undefined,
+  comments: readonly JiraComment[],
+  matcher: RegExp,
+  context: number,
+) {
+  const descriptionRows = markdownRows(description);
+  const descriptionRanges = grepRanges(descriptionRows, matcher, context, true);
+  const commentHits = comments
+    .map((comment) => ({
+      comment,
+      ranges: grepRanges(markdownRows(comment.body), matcher, context, true),
+    }))
+    .filter(({ ranges }) => ranges.length > 0);
+  const found =
+    descriptionRanges.length + commentHits.reduce((sum, { ranges }) => sum + ranges.length, 0);
+  let room = GREP_RANGE_CAP;
+  const take = (ranges: object[]) => {
+    const shown = ranges.slice(0, room);
+    room -= shown.length;
+    return shown;
+  };
+  const shownDescription = take(descriptionRanges);
+  const shownComments = commentHits
+    .map(({ comment, ranges }) => ({
+      id: comment.id,
+      author: userName(comment.author),
+      created: shortTs(comment.created),
+      ranges: take(ranges),
+    }))
+    .filter(({ ranges }) => ranges.length > 0);
+  return {
+    ...header,
+    matches: found,
+    moreMatches: found > GREP_RANGE_CAP ? found - GREP_RANGE_CAP : undefined,
+    description:
+      shownDescription.length === 0
+        ? undefined
+        : { lines: descriptionRows.length, ranges: shownDescription },
+    comments: shownComments,
+    commentsSearched: comments.length,
+  };
+}
+
 const issueGet = defineCommand({
   name: "issue.get",
-  summary: "Get one issue with its description",
+  summary:
+    "Get one issue with its description; --comments N adds the newest comments; --grep <regex> returns only matching description and comment lines (comments tagged with id/author/created)",
   mcpTools: ["getJiraIssue"],
   args: [ISSUE_ARG],
   flags: Type.Object({
@@ -438,16 +574,42 @@ const issueGet = defineCommand({
         default: 0,
       }),
     ),
+    grep: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Return only the description and comment lines matching this regex (case-insensitive): header fields plus {matches, description?: {lines, ranges}, comments?: [{id, author, created, ranges}]}; searches all comments unless --comments N",
+      }),
+    ),
+    context: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 50,
+        description: "With --grep: lines of context around each match; overlapping ranges merge",
+      }),
+    ),
   }),
   sideEffects: "none",
   examples: [
     "atl issue get ABC-123",
     "atl issue get ABC-123 --comments 5 --format adf",
     "atl issue get ABC-123 --issue-fields '*all' --expand renderedFields",
+    'atl issue get ABC-123 --grep "vendor" --context 1',
   ],
   async run(ctx, input) {
-    const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const { flags } = input;
+    if (flags.context !== undefined && flags.grep === undefined) {
+      throw inputError("invalid_flag_combination", "--context needs --grep", "Add --grep <regex>");
+    }
+    if (flags.grep !== undefined && (ctx.full || flags.format === "adf")) {
+      throw inputError(
+        "invalid_flag_combination",
+        `--grep searches text lines and cannot be combined with ${ctx.full ? "--full" : "--format adf"}`,
+        "Use the default markdown format",
+      );
+    }
+    const matcher = flags.grep === undefined ? undefined : grepPattern(flags.grep);
+    const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const requested = splitList(flags.issueFields);
     // Without --issue-fields, compact output also shows due date, components, fix versions, start
     // date, flagged, sprint and story points when set; --full asks for every field, like the raw
@@ -473,26 +635,25 @@ const issueGet = defineCommand({
       },
     });
     const count = flags.comments ?? 0;
-    let comments: JiraComment[] | undefined;
-    if (count > 0) {
-      const page = await session.http.request<CommentPage>({
-        method: "GET",
-        url: session.jiraUrl(`/rest/api/3/issue/${key}/comment`),
-        query: { orderBy: "-created", maxResults: count },
-      });
-      comments = page.comments ?? [];
-    }
+    // --grep searches every comment unless --comments narrows it to the newest N.
+    const comments =
+      count > 0 || matcher !== undefined
+        ? await fetchComments(session, key, count > 0 ? count : undefined)
+        : undefined;
     if (ctx.full) {
       return comments === undefined ? issue : { ...issue, comments };
     }
-    const compact = compactIssue(
-      session,
-      issue,
-      flags.format,
-      fields.includes("description") || fields.includes("*all"),
-      false,
-      named,
-    );
+    const withDescription = fields.includes("description") || fields.includes("*all");
+    if (matcher !== undefined) {
+      return grepIssue(
+        compactIssue(session, issue, flags.format, false, false, named),
+        withDescription ? issue.fields?.description : undefined,
+        comments ?? [],
+        matcher,
+        flags.context ?? 0,
+      );
+    }
+    const compact = compactIssue(session, issue, flags.format, withDescription, false, named);
     if (comments === undefined) {
       return compact;
     }

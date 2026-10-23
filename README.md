@@ -83,7 +83,7 @@ agent contract
 
 ### Agent skill
 
-`skills/atl/SKILL.md` teaches agents when and how to use `atl` (task → command map, `--output` for large pages, inline bodies, error handling). Install for omp by linking it into a skills root, e.g. `ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`, with the `atl` binary on `PATH`.
+`skills/atl/SKILL.md` is a compact command table for agents (under 700 tokens): search, issue, board, page and write commands with the flags agents otherwise look up through `--help`, plus a few output and error rules. Install for omp by linking it into a skills root, e.g. `ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`, with the `atl` binary on `PATH`.
 
 ### Writes
 
@@ -94,6 +94,7 @@ agent contract
 - `atl api` and `atl mcp call` require `--yes` for anything that is not a read. Destructive commands (`issue delete`, `issue comment-delete`, `issue attachment delete`, `issue remote-link delete`, `bulk delete`, `page restrict`, `page property delete`, `page permissions remove | set`) also require `--yes`; `issue convert` needs it when the issue has children. `--plan` works without it.
 - `page update` always reads the current body as ADF; a markdown body that would drop inline-comment anchors fails with `inline_comment_anchors_dropped` (`--plan` lists them as `droppedInlineComments`) unless `--force`. `issue attachment download` never overwrites (`file_exists`) without `--force`.
 - A command that declares its own `--version` flag (`page get`, `page restore`) owns it; `-V` always prints the CLI version.
+- Page commands (`page get | tree | children | versions | labels | diff | ancestors | properties | permissions list | restriction | operations`, `comment list`) take an exact page title in place of an id or URL, optionally narrowed with `--space KEY`: one match resolves, several fail with `ambiguous_title` (id, space key and title per candidate, plus a `next` command each), none with `not_found` (exit 2); `--type blogpost` looks among blog posts.
 
 `atl <command> --help` prints usage, flags and examples; `atl commands run --fields page.get` returns the same as JSON with a flag schema.
 

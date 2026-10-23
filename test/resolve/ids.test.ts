@@ -5,6 +5,7 @@ import {
   encodeTinyLink,
   parseAnyRef,
   parseConfluenceRef,
+  pageTitleRef,
   parseJiraRef,
   parseDisplayLink,
   parseSite,
@@ -153,6 +154,26 @@ describe("a page title is not a reference", () => {
     }
     throw new Error("expected invalid_content_ref");
   });
+});
+
+describe("pageTitleRef", () => {
+  test.each([
+    "atl smoke nm corp Release Process",
+    "Runbook",
+    "abcDEF123",
+    "  Padded title ",
+    "x:y",
+  ])("%p is a title", (input) => expect(pageTitleRef(input)).toBe(input.trim()));
+
+  test.each([
+    "123456",
+    " 123456 ",
+    "ari:cloud:confluence:abc:page/42",
+    "https://acme.atlassian.net/wiki/x/abc",
+    "acme.atlassian.net/wiki/spaces/ENG/pages/1/T",
+    "<https://acme.atlassian.net/wiki/spaces/ENG/pages/1/T>",
+    "",
+  ])("%p is not a title", (input) => expect(pageTitleRef(input)).toBeUndefined());
 });
 
 describe("parseJiraRef", () => {
