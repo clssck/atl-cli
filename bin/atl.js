@@ -15,7 +15,7 @@ const bunNodeCompatibilityMode =
   runningUnderBun &&
   (path.basename(process.argv0).toLowerCase().startsWith("node") ||
     (process.env.npm_lifecycle_event === "bunx" &&
-      ["atl", "atl-cli"].includes(process.env.npm_lifecycle_script ?? "") &&
+      ["atl", "@clssck/atl-cli"].includes(process.env.npm_lifecycle_script ?? "") &&
       /^bun(?:\.exe)?$/i.test(path.basename(process.env.npm_execpath ?? ""))));
 // Plain `bun bin/atl.js` loaded nothing when the cwd holds none of the files
 // Bun autoloads, so it is as safe as --no-env-file and may proceed.
@@ -85,7 +85,7 @@ if (!runningUnderBun) {
     code: "env_autoload_enabled",
     category: "usage",
     exitCode: 1,
-    hint: "Use `bunx --bun atl-cli` or pass `--no-env-file` before the script path.",
+    hint: "Use `bunx --bun @clssck/atl-cli` or pass `--no-env-file` before the script path.",
   });
 } else {
   const here = import.meta.dir;

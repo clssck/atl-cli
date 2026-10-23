@@ -62,7 +62,7 @@ try {
 
   run(process.execPath, ["add", "--cwd", installDir, "--no-save", "--ignore-scripts", tarball]);
 
-  const installed = path.join(installDir, "node_modules", "atl-cli");
+  const installed = path.join(installDir, "node_modules", "@clssck", "atl-cli");
   const cli = path.join(installed, "bin", "atl.js");
   assert(await Bun.file(cli).exists(), `installed CLI entrypoint is missing: ${cli}`);
   const pkg: { version: string } = await Bun.file(path.join(installed, "package.json")).json();

@@ -1,6 +1,6 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "atl-cli",
+  "name": "@clssck/atl-cli",
   "version": "0.0.0",
   "description": "Agent-oriented JSON CLI for Confluence and Jira Cloud over REST, with a companion agent skill.",
   "homepage": "https://github.com/clssck/atl-cli",

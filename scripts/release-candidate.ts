@@ -7,7 +7,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const root = path.resolve(import.meta.dir, "..");
-const packageName = "atl-cli";
+const packageName = "@clssck/atl-cli";
+// npm pack names a scoped tarball `<scope>-<name>-<version>.tgz`; the registry serves it as `<name>-<version>.tgz`.
+const packedBase = "clssck-atl-cli";
+const tarballBase = "atl-cli";
 
 export interface CandidateManifest {
   name: string;
@@ -101,7 +104,7 @@ async function prepareCandidate(bump: string, directory: string): Promise<void> 
   run([process.execPath, "run", "build"]);
   // Build once, then pack without lifecycle scripts rebuilding the candidate.
   run(["npm", "pack", "--ignore-scripts", "--pack-destination", directory]);
-  const packed = path.join(directory, `${packageName}-${pkg.version}.tgz`);
+  const packed = path.join(directory, `${packedBase}-${pkg.version}.tgz`);
   const tarball = path.join(directory, "package.tgz");
   fs.renameSync(packed, tarball);
   const bytes = await Bun.file(tarball).bytes();
@@ -202,7 +205,7 @@ export async function verifyPublishedCandidate(
   }
   const metadataUrl = new URL(`${packageName}/${manifest.version}`, registryUrl);
   const tarballUrl = new URL(
-    `${packageName}/-/${packageName}-${manifest.version}.tgz`,
+    `${packageName}/-/${tarballBase}-${manifest.version}.tgz`,
     registryUrl,
   );
   const deadline = Date.now() + timeoutMs;
