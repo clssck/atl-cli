@@ -73,7 +73,7 @@ Method, scenarios and scripts: [eval/README.md](eval/README.md).
 
 ## Install and build
 
-Install from npm; Bun >= 1.4.3 must be on PATH at runtime (the `atl` launcher re-executes under Bun with `.env` autoloading disabled):
+Install from npm; Bun >= 1.4.4 must be on PATH at runtime (the `atl` launcher re-executes under Bun with `.env` autoloading disabled):
 
 ```bash
 bun add -g atl-cli                # or: npm i -g atl-cli
@@ -94,7 +94,7 @@ bun run compile:windows           # dist/atl.exe
 bun run test:platform             # pack, install into a temp dir, smoke the installed atl
 ```
 
-Releases: dispatch the Release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) with a patch/minor/major bump. It prepares one versioned candidate (`npm version` syncs `plugin.json` and cuts the `[Unreleased]` changelog section), runs CI on Linux, macOS and Windows against that exact tarball, publishes it to npm with provenance, then pushes the version commit and tag atomically and creates the GitHub Release. Publishing needs an npm trusted publisher configured for `clssck/atl-cli` (workflow `release.yml`).
+Releases: dispatch the Release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) with a patch/minor/major bump. It prepares one versioned candidate (`npm version` syncs `plugin.json` and cuts the `[Unreleased]` changelog section), runs CI on Linux, macOS and Windows against that exact tarball, publishes it to npm with provenance, then pushes the version commit and tag atomically and creates the GitHub Release. `main` only takes pull requests with green CI; the release push uses the `RELEASE_DEPLOY_KEY` deploy key, the ruleset's only bypass. Publishing needs an npm trusted publisher configured for `clssck/atl-cli` (workflow `release.yml`).
 
 ## Auth
 

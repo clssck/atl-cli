@@ -4,7 +4,7 @@ Thanks for your interest in improving atl, the JSON CLI for Jira and Confluence.
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) >= 1.4.3: package manager, source runtime, and test runner
+- [Bun](https://bun.sh) >= 1.4.4: package manager, source runtime, and test runner
 - Git
 
 atl has no runtime dependencies and every change keeps it that way.
