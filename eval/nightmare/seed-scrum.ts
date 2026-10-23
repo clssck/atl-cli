@@ -23,6 +23,8 @@ const BOARD = "2";
 const SPACE = "NMCORP";
 const ENGINEERING_SPACE = "SZOFTVERFE";
 const PREFIX = "atl smoke nm scrum ";
+/** Issues planted by seed-chaos-jira.ts live in NMS too (future sprint, never the backlog); they are not part of the scrum facts. */
+const CHAOS_PREFIX = "atl smoke nm chaos ";
 const PAGE_PREFIX = "atl smoke nm corp ";
 const POINTS_FIELD = "customfield_10016";
 const LEGACY_POINTS_FIELD = "customfield_10042";
@@ -203,7 +205,7 @@ async function loadIssues(): Promise<Map<string, Issue>> {
         .filter((key) => key !== ""),
     };
     issues.set(issue.key, issue);
-    if (!issue.summary.startsWith(PREFIX)) {
+    if (!issue.summary.startsWith(PREFIX) && !issue.summary.startsWith(CHAOS_PREFIX)) {
       checks.push(`${issue.key} summary lacks the prefix "${PREFIX}": ${issue.summary}`);
     }
   }
@@ -311,6 +313,7 @@ async function verifyJira(): Promise<Obj> {
     }
   }
   const epics = new Set([...issues.values()].filter((i) => i.epic).map((i) => i.key));
+  const scrumEpics = [...epics].filter((key) => !issue(key).summary.startsWith(CHAOS_PREFIX));
   const boardBacklog = items(await atl(["board", "issues", BOARD, "--dataset", "backlog", "--all"]))
     .map((item) => asString(item.key))
     .filter((key) => !epics.has(key))
@@ -354,12 +357,14 @@ async function verifyJira(): Promise<Obj> {
       keys: clean.map((i) => i.key),
       summaries: clean.map((i) => i.summary.slice(PREFIX.length)),
       duplicateKeys: duplicates.map((i) => i.key),
-      epicKeys: [...epics].toSorted(byKey),
+      epicKeys: [...scrumEpics].toSorted(byKey),
       withDuplicates: backlog.length,
-      withEpics: backlog.length + epics.size,
+      withEpics: backlog.length + scrumEpics.length,
     },
     issues: Object.fromEntries(
-      [...issues.values()].map((i) => [i.key, { summary: i.summary, type: i.type, status: i.status, points: i.points, legacyPoints: i.legacyPoints, sprints: i.sprints, labels: i.labels }]),
+      [...issues.values()]
+        .filter((i) => !i.summary.startsWith(CHAOS_PREFIX))
+        .map((i) => [i.key, { summary: i.summary, type: i.type, status: i.status, points: i.points, legacyPoints: i.legacyPoints, sprints: i.sprints, labels: i.labels }]),
     ),
   };
 }

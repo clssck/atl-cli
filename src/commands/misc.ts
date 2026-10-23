@@ -161,9 +161,9 @@ const ADF_TO_MARKDOWN: Record<string, string> = {
   "media / mediaSingle / mediaGroup / mediaInline":
     "![alt or file](media:<id>?collection=<c>) placeholder; external media keeps its URL (empty alt stays empty) and its link as [![alt](src)](href)",
   extension:
-    "<!-- macro:<key> -->; legacy-content (a table or task list Confluence kept as a macro) renders its content",
-  "inlineExtension (macros)": "<!-- macro:<key> -->",
-  bodiedExtension: "<!-- macro:<key> --> body <!-- /macro:<key> -->",
+    '<!-- macro:<key> name="value" ... --> with the macro\'s content-bearing parameters (page, jqlQuery, name, ...; ids and style noise skipped, long values cut); legacy-content (a table or task list Confluence kept as a macro) renders its content',
+  "inlineExtension (macros)": '<!-- macro:<key> name="value" ... -->',
+  bodiedExtension: '<!-- macro:<key> name="value" ... --> body <!-- /macro:<key> -->',
   "unknown node": "its children, or <!-- adf:<type> --> when it has none",
 };
 
@@ -180,7 +180,7 @@ const FORMAT_ENTRIES = {
     notes: [
       "Pass short bodies inline with --body '<text>' or pipe them with --file -; longer ones go in --file <path>. --body and --file are mutually exclusive.",
       "Macros, mentions, panels, expands, statuses and dates cannot be authored from markdown; use --body-format adf or storage.",
-      "Round trip: reading a page as md and writing it back preserves text, marks, lists, tables and code, but macros come back as <!-- macro:key --> comments that are written as literal text.",
+      "Round trip: reading a page as md and writing it back preserves text, marks, lists, tables and code, but macros are not kept: their <!-- macro:key ... --> comments are dropped on write, and page update refuses (macros_dropped) unless --force; edit the ADF or storage body to keep macros.",
     ],
   },
   jira: {

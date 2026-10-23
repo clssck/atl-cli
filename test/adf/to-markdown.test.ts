@@ -26,6 +26,7 @@ const mark = (type: string, attrs?: Record<string, unknown>): AdfMark =>
 const md = (...content: AdfNode[]): string => adfToMarkdown(doc(...content));
 const panel = (panelType: string): string => md(node("panel", [para(text("body"))], { panelType }));
 const cell = (type: string, ...content: AdfNode[]): AdfNode => node(type, content);
+const param = (value: unknown): { value: unknown } => ({ value });
 
 describe("adfToMarkdown: blocks", () => {
   test("empty doc", () => {
@@ -395,6 +396,55 @@ describe("adfToMarkdown: media, extensions, unknown", () => {
     expect(md(para(text("a "), node("inlineExtension", undefined, { extensionKey: "jira" })))).toBe(
       "a <!-- macro:jira -->",
     );
+  });
+
+  test("macros keep their content-bearing parameters and skip ids, layout and secret-like ones", () => {
+    const parameters = {
+      macroParams: {
+        "": param("Payments Runbook"),
+        name: param("escalation"),
+        macroId: param("abc"),
+        borderColor: param("red"),
+        apiToken: param("s3cret"),
+        empty: param("  "),
+        nested: param({ a: 1 }),
+      },
+      macroMetadata: { macroId: { value: "abc" } },
+    };
+    expect(md(node("extension", undefined, { extensionKey: "excerpt-include", parameters }))).toBe(
+      '<!-- macro:excerpt-include page="Payments Runbook" name="escalation" -->',
+    );
+    const jql = `project = NMS AND fixVersion = "1.1" -- ${"x".repeat(200)}`;
+    const jira = md(
+      node("extension", undefined, {
+        extensionKey: "jira",
+        parameters: { macroParams: { jqlQuery: param(jql), maximumIssues: param(50) } },
+      }),
+    );
+    expect(jira).toStartWith(
+      '<!-- macro:jira jqlQuery="project = NMS AND fixVersion = \\"1.1\\" - xxx',
+    );
+    expect(jira).toEndWith('…" maximumIssues="50" -->');
+    expect(jira).not.toContain("--  ");
+    expect(
+      md(
+        node("bodiedExtension", [para(text("body"))], {
+          extensionKey: "expand",
+          parameters: { macroParams: { title: param("More") } },
+        }),
+      ),
+    ).toBe('<!-- macro:expand title="More" -->\n\nbody\n\n<!-- /macro:expand -->');
+    expect(
+      md(
+        para(
+          text("a "),
+          node("inlineExtension", undefined, {
+            extensionKey: "jira",
+            parameters: { macroParams: { key: param("NMS-1") } },
+          }),
+        ),
+      ),
+    ).toBe('a <!-- macro:jira key="NMS-1" -->');
   });
 
   test("unknown nodes render their children, else an adf comment", () => {

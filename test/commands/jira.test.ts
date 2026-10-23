@@ -906,6 +906,42 @@ describe("issue.comments", () => {
     expect(calls.map((c) => c.query.get("startAt"))).toEqual(["0", "1"]);
     expect(calls[0]?.query.get("maxResults")).toBe("100");
   });
+
+  test("marks an edited comment, even when the edit falls in the same second", async () => {
+    respond({
+      "/rest/api/3/issue/ABC-123/comment": {
+        startAt: 0,
+        maxResults: 100,
+        total: 3,
+        comments: [
+          {
+            id: "1",
+            created: "2026-10-23T10:56:14.082+0200",
+            updated: "2026-10-23T10:56:14.431+0200",
+            body: doc("edited quickly"),
+          },
+          {
+            id: "2",
+            created: "2026-10-23T10:56:14.997+0200",
+            updated: "2026-10-23T10:56:14.997+0200",
+            body: doc("untouched"),
+          },
+          {
+            id: "3",
+            created: "2026-10-23T10:56:14.000+0200",
+            updated: "2026-10-23T12:00:00.000+0200",
+            body: doc("edited later"),
+          },
+        ],
+      },
+    });
+    const items = itemsOf(await run("issue.comments", { issue: "ABC-123" }));
+    expect(items.map((c) => [c.id, c.edited, c.updated])).toEqual([
+      ["1", true, undefined],
+      ["2", undefined, undefined],
+      ["3", undefined, "2026-10-23T12:00:00+0200"],
+    ]);
+  });
 });
 
 describe("jql", () => {
@@ -1664,15 +1700,28 @@ describe("MCP read parity flags", () => {
             id: "31",
             name: "Done",
             to: { name: "Done" },
-            fields: { resolution: { required: true } },
+            hasScreen: true,
+            fields: {
+              resolution: {
+                required: true,
+                name: "Resolution",
+                allowedValues: [{ name: "Done" }, { name: "Won't Do" }],
+              },
+              comment: { name: "Comment" },
+            },
           },
+          { id: "11", name: "Start", to: { name: "In Progress" }, fields: {} },
         ],
       },
     });
     const items = itemsOf(
       await run("issue.transitions", { issue: "ABC-123" }, { expand: "transitions.fields" }),
     );
-    expect(items[0]?.fields).toEqual({ resolution: { required: true } });
+    expect(items[0]?.fields).toEqual([
+      { id: "resolution", name: "Resolution", required: true, allowed: ["Done", "Won't Do"] },
+      { id: "comment", name: "Comment" },
+    ]);
+    expect(items[1]).toEqual({ id: "11", name: "Start", to: "In Progress" });
   });
 
   test("issue.links --global-id implies --remote, sends globalId and accepts a single object", async () => {

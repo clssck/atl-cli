@@ -202,6 +202,53 @@ function fieldValue(name: string, raw: string, field: FieldRecord | undefined): 
   return parsed === undefined ? raw : parsed.value;
 }
 
+interface ResolutionRecord {
+  id?: string;
+  name?: string;
+}
+
+async function fetchResolutions(session: Session, english: boolean): Promise<ResolutionRecord[]> {
+  return session.http.request<ResolutionRecord[]>({
+    method: "GET",
+    url: session.jiraUrl("/rest/api/3/resolution"),
+    ...(english ? { headers: ENGLISH } : {}),
+  });
+}
+
+/**
+ * `--set resolution=...` as the API's `{id}`: a resolution given by its localized or English name
+ * (`Kész`, `Won't Do`, or `{"name": ...}`) is looked up in the site's list, because Jira accepts
+ * some localized names and rejects others (HTTP 400). `null` clears; `{id}` and other values pass through.
+ */
+async function resolutionValue(session: Session, value: unknown): Promise<unknown> {
+  const name =
+    typeof value === "string"
+      ? value
+      : typeof value === "number"
+        ? String(value)
+        : isRecord(value)
+          ? value.name
+          : undefined;
+  if (typeof name !== "string" || (isRecord(value) && value.id !== undefined)) {
+    return value;
+  }
+  const wanted = name.trim().toLowerCase();
+  const localized = await fetchResolutions(session, false);
+  const english = await fetchResolutions(session, true);
+  const hit = [...localized, ...english].find(
+    (resolution) => resolution.id === wanted || resolution.name?.toLowerCase() === wanted,
+  );
+  if (hit?.id === undefined) {
+    const names = present([...localized, ...english].map((resolution) => resolution.name));
+    throw inputError(
+      "unknown_resolution",
+      `Unknown resolution "${name}". Available: ${names.join(", ")}`,
+      "See `atl resolution list`.",
+    );
+  }
+  return { id: hit.id };
+}
+
 /**
  * Merge `--fields-file`, then `--set`, then the dedicated flags. Keys may be field ids or names;
  * names resolve through the site's field list (read once, only when a key needs it). A dedicated
@@ -241,6 +288,9 @@ async function buildFields(
     }
     const { id, field } = await lookup(name);
     merged[id] = fieldValue(id, entry.slice(equals + 1), field);
+  }
+  if (Object.hasOwn(merged, "resolution")) {
+    merged.resolution = await resolutionValue(session, merged.resolution);
   }
   for (const [name, value] of Object.entries(dedicated)) {
     if (Object.hasOwn(merged, name)) {
@@ -474,7 +524,13 @@ async function workingSeconds(session: Session): Promise<{ d: number; w: number 
  * only when one of them is present.
  */
 async function durationSeconds(session: Session, text: string): Promise<number> {
-  const parts = text.split(/\s+/).map((token) => DURATION_TOKEN.exec(token));
+  // `1h30m` is `1h 30m`: a unit letter directly followed by the next amount starts a new token.
+  const parts = text
+    .trim()
+    .toLowerCase()
+    .replaceAll(/([wdhms])(?=\d)/g, "$1 ")
+    .split(/\s+/)
+    .map((token) => DURATION_TOKEN.exec(token));
   const valid = parts.flatMap((match) =>
     match?.[1] === undefined || match[2] === undefined
       ? []
@@ -484,7 +540,7 @@ async function durationSeconds(session: Session, text: string): Promise<number> 
     throw inputError(
       "invalid_time_spent",
       `Invalid time spent "${text}"`,
-      'Use w/d/h/m units, e.g. "2h 30m", "1d", "1.5h" or "1,5h".',
+      'Use w/d/h/m units, e.g. "2h 30m", "2h30m", "1d", "1.5h" or "1,5h".',
     );
   }
   const working = valid.some((p) => p.unit === "d" || p.unit === "w")
@@ -780,7 +836,7 @@ const issueMove = defineCommand({
   sideEffects: "write",
   examples: [
     'atl issue move ABC-123 "In Progress"',
-    'atl issue move ABC-123 Done --set resolution=\'{"name":"Done"}\' --comment "Shipped in 1.2"',
+    'atl issue move ABC-123 Done --set resolution="Won\'t Do" --comment "Dropped"',
     "atl issue move ABC-123 Done --comment-file why.md --plan",
     "atl issue move ABC-123 31 --plan",
   ],
@@ -797,21 +853,44 @@ const issueMove = defineCommand({
       flags.historyMetadataFile === undefined
         ? undefined
         : await readJsonObject(flags.historyMetadataFile, "--history-metadata-file");
-    const sent = await sendWrite<undefined>(
-      ctx,
-      session.http,
-      {
-        method: "POST",
-        url: session.jiraUrl(`/rest/api/3/issue/${key}/transitions`),
-        body: {
-          transition: { id: transition.id },
-          ...(Object.keys(fields).length === 0 ? {} : { fields }),
-          ...(Object.keys(update).length === 0 ? {} : { update }),
-          ...(historyMetadata === undefined ? {} : { historyMetadata }),
+    const resolutionArg = flags.set?.find((entry) => /^\s*resolution\s*=/i.test(entry));
+    let sent: undefined | Plan;
+    try {
+      sent = await sendWrite<undefined>(
+        ctx,
+        session.http,
+        {
+          method: "POST",
+          url: session.jiraUrl(`/rest/api/3/issue/${key}/transitions`),
+          body: {
+            transition: { id: transition.id },
+            ...(Object.keys(fields).length === 0 ? {} : { fields }),
+            ...(Object.keys(update).length === 0 ? {} : { update }),
+            ...(historyMetadata === undefined ? {} : { historyMetadata }),
+          },
         },
-      },
-      ["atl", "issue", "get", rawKey],
-    );
+        ["atl", "issue", "get", rawKey],
+      );
+    } catch (error) {
+      if (
+        resolutionArg !== undefined &&
+        error instanceof AtlError &&
+        error.status === 400 &&
+        /resolution/i.test(error.message) &&
+        /screen|cannot be set/i.test(error.message)
+      ) {
+        const value = resolutionArg.slice(resolutionArg.indexOf("=") + 1).trim();
+        throw new AtlError(error.message, {
+          code: "resolution_not_on_transition_screen",
+          category: "input",
+          status: 400,
+          hint: `This transition's screen has no resolution field, so nothing was changed. Move without --set resolution, then run \`atl issue update ${rawKey} --set resolution=${value}\` (the transition stamps its own default resolution first).`,
+          next: [["atl", "issue", "update", rawKey, "--set", `resolution=${value}`]],
+          cause: error,
+        });
+      }
+      throw error;
+    }
     // The transition screen need not carry a comment field, which Jira ignores silently: post the
     // comment through the comment API once the transition has succeeded.
     const commentRequest: PlannedRequest | undefined =

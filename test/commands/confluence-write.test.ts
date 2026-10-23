@@ -75,6 +75,18 @@ function anchored(id: string): string {
   });
 }
 
+/** An ADF document of bare macros (extension nodes) with these keys. */
+function macroDoc(...keys: string[]): string {
+  return JSON.stringify({
+    type: "doc",
+    version: 1,
+    content: keys.map((extensionKey) => ({
+      type: "extension",
+      attrs: { extensionType: "com.atlassian.confluence.macro.core", extensionKey },
+    })),
+  });
+}
+
 /** Routes are keyed `METHOD /path` (path after `/wiki`, no query string). */
 function route(method: string, path: string, body: unknown, status = 200): void {
   routes.set(`${method} ${path}`, { status, body });
@@ -629,6 +641,65 @@ describe("page.update", () => {
       );
       expect(error.message).toContain("ann-2");
       expect(error.message).not.toContain("ann-1");
+    });
+  });
+
+  describe("on a page with macros", () => {
+    const MACRO_PAGE = {
+      ...CURRENT,
+      body: { atlas_doc_format: { value: macroDoc("jira", "excerpt-include") } },
+    };
+
+    test("a markdown body would drop the macros: refused, nothing is written", async () => {
+      route("GET", "/api/v2/pages/123456", MACRO_PAGE);
+      const error = await errorOf(run(pageUpdate, { page: "123456" }, { file: bodyFile() }));
+      expect(error.code).toBe("macros_dropped");
+      expect(error.category).toBe("input");
+      expect(error.message).toContain("jira, excerpt-include");
+      expect(error.hint).toContain("--force");
+      expect(sent("PUT")).toHaveLength(0);
+    });
+
+    test("--force saves and lists the dropped macros", async () => {
+      route("GET", "/api/v2/pages/123456", MACRO_PAGE);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      const { result, diagnostics } = await withDiagnostics(() =>
+        run(pageUpdate, { page: "123456" }, { file: bodyFile(), force: true }),
+      );
+      expect(sent("PUT")).toHaveLength(1);
+      expect(asRecord(result).droppedMacros).toEqual(["jira", "excerpt-include"]);
+      expect(diagnostics).toEqual([
+        { type: "warning", code: "macros_dropped", message: expect.stringContaining("jira") },
+      ]);
+    });
+
+    test("ADF and storage bodies that keep the macros are not flagged; one that lacks a macro is", async () => {
+      route("GET", "/api/v2/pages/123456", MACRO_PAGE);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      const adfResult = asRecord(
+        await run(
+          pageUpdate,
+          { page: "123456" },
+          { body: macroDoc("excerpt-include", "jira"), bodyFormat: "adf" },
+        ),
+      );
+      const storageResult = asRecord(
+        await run(
+          pageUpdate,
+          { page: "123456" },
+          {
+            body: '<ac:structured-macro ac:name="jira"></ac:structured-macro><ac:structured-macro ac:name="excerpt-include"></ac:structured-macro>',
+            bodyFormat: "storage",
+          },
+        ),
+      );
+      expect(adfResult.droppedMacros).toBeUndefined();
+      expect(storageResult.droppedMacros).toBeUndefined();
+      const error = await errorOf(
+        run(pageUpdate, { page: "123456" }, { body: macroDoc("jira"), bodyFormat: "adf" }),
+      );
+      expect(error.message).toContain("excerpt-include");
+      expect(error.message).not.toContain("jira,");
     });
   });
 

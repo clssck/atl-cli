@@ -8,7 +8,9 @@ Token and agent-friendliness eval of `atl` against the Atlassian Remote MCP (v1)
 | `lib.ts` | shared plumbing: binary path, subprocess runner, `omp toks` counts, MCP session, manifest loader |
 | `micro.ts` | one call each: 15 atl command / MCP tool pairs; bytes, Claude tokens, info-parity check |
 | `scenarios.ts` | eight natural-language scenarios (s1-s8) with answer checks from the manifest |
-| `nightmare/scenarios.ts` | twenty-one scenarios (n01-n21) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/scenarios.ts` | twenty-nine scenarios (n01-n29) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence,chaos-jira,chaos-confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/checks.ts` | shared answer checks: manifest readers, matchers, decoy judging |
+| `nightmare/chaos-{jira,confluence}.ts` | n22-n29 (moved issue, abandoned vs delivered, reopened regression, contradicting sources; excerpt-include, expand + deprecated, renamed page, Jira macro vs stale count) |
 | `nightmare/seed-scrum.ts` | read-only verifier of the Scrum project NMS and the second space NMCORP; writes `.out/nightmare/scrum.json` |
 | `run.ts` | macro eval: headless `omp -p` agents per arm and scenario; metrics per run |
 | `report.ts` | builds `.out/report.md` from `micro.json` and the run metrics |
@@ -42,6 +44,13 @@ bun eval/nightmare/seed-scrum.ts         # read-only check of project NMS and sp
 ```
 
 `seed-scrum.ts` creates nothing: the scrum data behind n16-n21 (project NMS with board, components, versions, sprints and story points; space NMCORP with labels and the `travel-limits.csv` attachment) was set up once through the browser plus `atl issue` / `atl page` creation. The script reads it back with the binary, computes the facts (remaining points, velocity, carried-over and backlog keys, policy values), exits 1 listing every divergence under `consistencyChecks`, and writes `scrum.json`. The attachment content cannot be downloaded with this token (HTTP 401), so no scenario depends on it.
+
+```bash
+bun eval/nightmare/seed-chaos-jira.ts         # 11 NMS issues prefixed "atl smoke nm chaos"; manifest .out/nightmare/chaos-jira.json
+bun eval/nightmare/seed-chaos-confluence.ts   # chaos pages under "atl smoke nm chaos Root"; manifest .out/nightmare/chaos-confluence.json
+```
+
+The chaos seeders are idempotent and verify by reading back. n29's answer is the live result of the readiness page's JQL (open NMS issues on fixVersion 1.1): re-run `seed-chaos-confluence.ts` after changing those issues.
 
 ## Micro eval
 

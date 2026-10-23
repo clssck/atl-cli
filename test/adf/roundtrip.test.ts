@@ -41,6 +41,23 @@ Literal \\* star, \\_ underscore, \\# hash, 1\\. dot, and snake_case_word.
 `;
 
 describe("markdown -> ADF -> markdown", () => {
+  test("macro comments are dropped on read, not saved as visible text", () => {
+    const source = [
+      "Intro",
+      "",
+      '<!-- macro:jira jqlQuery="project = NMS" maximumIssues="50" -->',
+      "",
+      '<!-- macro:expand title="More" -->',
+      "",
+      "inside",
+      "",
+      "<!-- /macro:expand -->",
+      "",
+      'text <!-- macro:status colour="red" --> after',
+    ].join("\n");
+    expect(adfToMarkdown(markdownToAdf(source))).toBe("Intro\n\ninside\n\ntext after");
+  });
+
   test("is stable after one pass for a representative document", () => {
     const once = adfToMarkdown(markdownToAdf(REPRESENTATIVE));
     const twice = adfToMarkdown(markdownToAdf(once));

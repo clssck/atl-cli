@@ -883,8 +883,21 @@ describe("issue.move", () => {
     expect(writes()).toEqual([]);
   });
 
+  const RESOLUTIONS = {
+    "GET /rest/api/3/resolution": ok([
+      { id: "10000", name: "Kész" },
+      { id: "10001", name: "Won't Do" },
+      { id: "10002", name: "Másolat" },
+    ]),
+    "EN GET /rest/api/3/resolution": ok([
+      { id: "10000", name: "Done" },
+      { id: "10001", name: "Won't Do" },
+      { id: "10002", name: "Duplicate" },
+    ]),
+  };
+
   test("sends fields and update from files", async () => {
-    serve(route);
+    serve({ ...route, ...RESOLUTIONS });
     const update = await file("update.json", JSON.stringify({ labels: [{ add: "shipped" }] }));
     const history = await file("history.json", JSON.stringify({ type: "cli" }));
     await run(
@@ -898,10 +911,74 @@ describe("issue.move", () => {
     );
     expect(writes()[0]?.body).toEqual({
       transition: { id: "21" },
-      fields: { resolution: { name: "Done" } },
+      fields: { resolution: { id: "10000" } },
       update: { labels: [{ add: "shipped" }] },
       historyMetadata: { type: "cli" },
     });
+  });
+
+  const UPDATE = {
+    "PUT /rest/api/3/issue/ABC-123": noContent,
+    "GET /rest/api/3/issue/ABC-123": ok(REFRESHED),
+  };
+
+  test.each([
+    ["Másolat", "10002"],
+    ["másolat", "10002"],
+    ["Duplicate", "10002"],
+    ["Won't Do", "10001"],
+    ['{"name":"Kész"}', "10000"],
+    ['"Done"', "10000"],
+    ["10001", "10001"],
+  ])("--set resolution=%s is sent as the id %s", async (value, id) => {
+    serve({ ...UPDATE, ...RESOLUTIONS });
+    await run("issue.update", { issue: "ABC-123" }, { set: [`resolution=${value}`] });
+    expect(writes()[0]?.body).toEqual({ fields: { resolution: { id } } });
+  });
+
+  test("an id passes through and an unknown resolution lists the names", async () => {
+    serve({ ...UPDATE, ...RESOLUTIONS });
+    await run("issue.update", { issue: "ABC-123" }, { set: ['resolution={"id":"7"}'] });
+    expect(writes()[0]?.body).toEqual({ fields: { resolution: { id: "7" } } });
+    sent = [];
+    const error = await failure(
+      run("issue.update", { issue: "ABC-123" }, { set: ["resolution=Nope"] }),
+    );
+    expect(error.code).toBe("unknown_resolution");
+    expect(error.category).toBe("input");
+    expect(error.message).toContain("Kész");
+    expect(error.message).toContain("Duplicate");
+    expect(writes()).toEqual([]);
+  });
+
+  test("a transition without a resolution field says to use issue update, and writes nothing more", async () => {
+    serve({
+      ...route,
+      ...RESOLUTIONS,
+      "POST /rest/api/3/issue/ABC-123/transitions": {
+        status: 400,
+        body: {
+          errors: {
+            resolution:
+              "Field 'resolution' cannot be set. It is not on the appropriate screen, or unknown.",
+          },
+        },
+      },
+    });
+    const error = await failure(
+      run(
+        "issue.move",
+        { issue: "ABC-123", transition: "Resolve" },
+        { set: ["resolution=Won't Do"] },
+      ),
+    );
+    expect(error.code).toBe("resolution_not_on_transition_screen");
+    expect(error.category).toBe("input");
+    expect(error.next).toEqual([
+      ["atl", "issue", "update", "ABC-123", "--set", "resolution=Won't Do"],
+    ]);
+    expect(error.hint).toContain("atl issue update ABC-123 --set resolution=Won't Do");
+    expect(writes()).toHaveLength(1);
   });
 
   test("--comment is posted through the comment API after the transition and its id reported", async () => {
@@ -1099,7 +1176,7 @@ describe("issue.log", () => {
     expect(sent).toEqual([]);
   });
 
-  test.each(["notatime", "2x", "h", "1..5h", "2h,30m", "2h30m"])(
+  test.each(["notatime", "2x", "h", "1..5h", "2h,30m", "2h30", "30m2"])(
     "invalid duration %p fails before any request",
     async (bad) => {
       serve({});
@@ -1118,6 +1195,9 @@ describe("issue.log", () => {
     ["2h 30m", 9000],
     ["90s", 90],
     ["1h 30m 30s", 5430],
+    ["2h30m", 9000],
+    ["1h30m30s", 5430],
+    ["1H30M", 5400],
   ])(
     "duration %p is sent as %p seconds without reading the site configuration",
     async (text, seconds) => {

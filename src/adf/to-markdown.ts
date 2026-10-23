@@ -11,7 +11,9 @@ import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
  * - decision item:   `- [decision] text`
  * - media:           `![alt or "file"](media:<id>)`, plus `?collection=<c>` when known; external media
  *                    keeps its URL (empty alt stays empty); a link mark wraps it as `[![alt](src)](href)`
- * - extension:       `<!-- macro:<key> -->`; bodied extensions add `<!-- /macro:<key> -->` after the body.
+ * - extension:       `<!-- macro:<key> name="value" ... -->` with the content-bearing `macroParams` (page, jqlQuery,
+ *                    name, ...; ids, layout and style noise skipped, values cut at 160 characters); bodied
+ *                    extensions add `<!-- /macro:<key> -->` after the body.
  *                    A Confluence `legacy-content` extension (a table or task list the page could not keep
  *                    in place) renders its nested content; without it, its storage markup as an `xml` fence
  * - status:          `[TEXT]`, date: `YYYY-MM-DD`, mention: `@Name` or `@<accountId>`
@@ -200,6 +202,44 @@ function macroKey(node: AdfNode): string {
   return key.replaceAll(/-{2,}/g, "-").replaceAll(/\s+/g, " ");
 }
 
+/** Macro parameters that carry no content: ids, schema/output plumbing, layout and style noise, anything secret-like. */
+const MACRO_PARAM_SKIP =
+  /^(?:macroid|__bodycontent|schemaversion|atlassian-macro-output-type)$|colou?r|style|width|height|border|align|icon|padding|margin|theme|layout|token|secret|passw(?:or)?d|api[-_]?key|credential|^auth(?!or)|[-_]auth(?!or)/i;
+const MACRO_VALUE_MAX = 160;
+
+/**
+ * ` name="value" ...` for a macro's `parameters.macroParams` (the unnamed default parameter is `page` for
+ * include macros, else `default`). Values are one line, quotes escaped, `--` collapsed so the comment cannot end early.
+ */
+function macroParams(node: AdfNode, key: string): string {
+  const parameters = node.attrs?.parameters;
+  const params = isRecord(parameters) ? parameters.macroParams : undefined;
+  if (!isRecord(params)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const [name, entry] of Object.entries(params)) {
+    const raw = isRecord(entry) ? entry.value : undefined;
+    if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
+      continue;
+    }
+    const fallback = key === "excerpt-include" || key === "include" ? "page" : "default";
+    const label = (name === "" ? fallback : name).replaceAll(/[^\w.:-]+/g, "_");
+    const flat = String(raw).replaceAll(/\s+/g, " ").trim();
+    if (flat === "" || MACRO_PARAM_SKIP.test(label)) {
+      continue;
+    }
+    const value = flat.length > MACRO_VALUE_MAX ? `${flat.slice(0, MACRO_VALUE_MAX)}…` : flat;
+    parts.push(`${label}="${value.replaceAll('"', '\\"').replaceAll(/-{2,}/g, "-")}"`);
+  }
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
+}
+
+function macroComment(node: AdfNode): string {
+  const key = macroKey(node);
+  return `<!-- macro:${key}${macroParams(node, key)} -->`;
+}
+
 function collectInline(nodes: AdfNode[], inherited: AdfMark[], out: Item[]): void {
   for (const node of nodes) {
     const marks = normalizeMarks([...inherited, ...(node.marks ?? [])]);
@@ -249,7 +289,7 @@ function collectInline(nodes: AdfNode[], inherited: AdfMark[], out: Item[]): voi
         out.push({ kind: "raw", value: mediaMarkdown(node) });
         break;
       case "inlineExtension":
-        out.push({ kind: "raw", value: `<!-- macro:${macroKey(node)} -->` });
+        out.push({ kind: "raw", value: macroComment(node) });
         break;
       case "placeholder":
         break;
@@ -761,13 +801,14 @@ function renderBlock(node: AdfNode, ctx: Ctx, alt: boolean): string {
       return url === undefined ? `<!-- adf:${node.type} -->` : cardMarkdown(url);
     }
     case "extension":
-      return legacyContent(node, ctx) ?? `<!-- macro:${macroKey(node)} -->`;
+      return legacyContent(node, ctx) ?? macroComment(node);
     case "bodiedExtension": {
       const key = macroKey(node);
       const body = renderBlocks(children, ctx, false);
+      const opener = macroComment(node);
       return body === ""
-        ? `<!-- macro:${key} -->\n\n<!-- /macro:${key} -->`
-        : `<!-- macro:${key} -->\n\n${body}\n\n<!-- /macro:${key} -->`;
+        ? `${opener}\n\n<!-- /macro:${key} -->`
+        : `${opener}\n\n${body}\n\n<!-- /macro:${key} -->`;
     }
     default:
       return children.length > 0 ? renderBlocks(children, ctx, false) : `<!-- adf:${node.type} -->`;

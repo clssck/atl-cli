@@ -196,7 +196,11 @@ function body(
   return value === null || value === undefined ? undefined : renderAdf(value, format);
 }
 
-/** Compact comment: author as display name; `updated` only when it differs from `created`. */
+/**
+ * Compact comment: author as display name; `updated` when it differs from `created` by a visible
+ * second, else `edited: true` when Jira's millisecond timestamps still differ (an edit seconds
+ * after posting must not look untouched).
+ */
 export function compactComment(comment: JiraComment, format: AdfFormat | undefined) {
   const created = shortTs(comment.created);
   const updated = shortTs(comment.updated);
@@ -205,6 +209,10 @@ export function compactComment(comment: JiraComment, format: AdfFormat | undefin
     author: userName(comment.author),
     created,
     updated: updated === created ? undefined : updated,
+    edited:
+      updated === created && comment.updated !== undefined && comment.updated !== comment.created
+        ? true
+        : undefined,
     body: body(comment.body, format),
   };
 }
@@ -501,6 +509,31 @@ export interface Transition {
   fields?: unknown;
 }
 
+interface TransitionField {
+  name?: string;
+  required?: boolean;
+  allowedValues?: { name?: string; value?: string; id?: string }[];
+}
+
+/** Screen fields of a transition as `[{id, name, required, allowed}]`; absent when the transition has no screen. */
+function compactTransitionFields(fields: unknown) {
+  const entries = isRecord(fields) ? Object.entries(fields) : [];
+  return entries.length === 0
+    ? undefined
+    : entries.map(([id, raw]) => {
+        const field: TransitionField = isRecord(raw) ? raw : {};
+        const allowed = (field.allowedValues ?? [])
+          .map((value) => value.name ?? value.value ?? value.id)
+          .filter((value): value is string => value !== undefined);
+        return {
+          id,
+          name: field.name,
+          required: field.required === true ? true : undefined,
+          allowed: allowed.length === 0 ? undefined : allowed,
+        };
+      });
+}
+
 const issueTransitions = defineCommand({
   name: "issue.transitions",
   summary: "List transitions available for an issue",
@@ -551,7 +584,7 @@ const issueTransitions = defineCommand({
         to: t.to?.name,
         hasScreen: t.hasScreen === true ? true : undefined,
         isAvailable: t.isAvailable === false ? false : undefined,
-        fields: t.fields,
+        fields: compactTransitionFields(t.fields),
       })),
     };
   },

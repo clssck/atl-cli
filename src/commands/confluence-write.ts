@@ -202,6 +202,61 @@ function droppedAnchors(
   return [...annotationIds(parseAdfBody(value).content, new Set())].filter((id) => !kept.has(id));
 }
 
+const MACRO_NODES: Record<string, true> = {
+  extension: true,
+  bodiedExtension: true,
+  inlineExtension: true,
+};
+
+/** Macro keys with their count in an ADF tree; `legacy-content` is a kept table or task list, not a macro. */
+function macroCounts(
+  nodes: readonly AdfNode[] | undefined,
+  found: Map<string, number>,
+): Map<string, number> {
+  for (const node of nodes ?? []) {
+    const key = node.attrs?.extensionKey;
+    if (MACRO_NODES[node.type] === true && typeof key === "string" && key !== "legacy-content") {
+      found.set(key, (found.get(key) ?? 0) + 1);
+    }
+    macroCounts(node.content, found);
+  }
+  return found;
+}
+
+/**
+ * Macros in the current body that a replacement body lacks (one entry per missing occurrence). Markdown
+ * cannot carry macros (its `<!-- macro:... -->` comments are dropped on read); ADF and storage bodies keep the
+ * ones they include (storage names them `ac:structured-macro ac:name`).
+ */
+function droppedMacros(
+  current: { atlas_doc_format?: { value?: string } } | undefined,
+  replacement: LoadedBody,
+): string[] {
+  const value = current?.atlas_doc_format?.value;
+  if (value === undefined) {
+    return [];
+  }
+  const kept =
+    replacement.kind === "adf"
+      ? macroCounts(replacement.doc.content, new Map())
+      : new Map<string, number>();
+  if (replacement.kind === "storage") {
+    for (const match of replacement.value.matchAll(
+      /<ac:structured-macro\b[^>]*\bac:name="([^"]+)"/g,
+    )) {
+      const key = match[1] ?? "";
+      kept.set(key, (kept.get(key) ?? 0) + 1);
+    }
+  }
+  const missing: string[] = [];
+  for (const [key, count] of macroCounts(parseAdfBody(value).content, new Map())) {
+    for (let index = kept.get(key) ?? 0; index < count; index++) {
+      missing.push(key);
+    }
+  }
+  return missing;
+}
+
 const CONTAINER_TYPE_FLAG = Type.Optional(
   Type.Union([Type.Literal("page"), Type.Literal("blogpost")], {
     description: "Create or update a page (default) or a blog post",
@@ -375,6 +430,23 @@ export const pageUpdate = defineCommand({
         ...(ctx.plan ? { hint: "Running this update needs --force" } : {}),
       });
     }
+    const droppedMacroKeys = loaded === undefined ? [] : droppedMacros(current.body, loaded);
+    if (droppedMacroKeys.length > 0) {
+      const message = `The new body drops ${droppedMacroKeys.length} macro(s): ${droppedMacroKeys.join(", ")}; markdown cannot carry macros`;
+      if (flags.force !== true && !ctx.plan) {
+        throw inputError(
+          "macros_dropped",
+          message,
+          "Pass --force to save anyway, or edit the ADF (page get --format adf) or storage (--format storage) so the macros are kept.",
+        );
+      }
+      writeDiagnostic({
+        type: "warning",
+        code: "macros_dropped",
+        message,
+        ...(ctx.plan ? { hint: "Running this update needs --force" } : {}),
+      });
+    }
     // Omitted --status keeps the current one. v2 wants version 1 when saving a draft and when
     // publishing a never-published draft (its first current version); otherwise current + 1.
     const status = flags.status ?? (current.status === "draft" ? "draft" : "current");
@@ -415,11 +487,16 @@ export const pageUpdate = defineCommand({
       },
     );
     if (isPlan(updated)) {
-      return dropped.length > 0 ? { ...updated, droppedInlineComments: dropped } : updated;
+      return {
+        ...updated,
+        ...(dropped.length > 0 ? { droppedInlineComments: dropped } : {}),
+        ...(droppedMacroKeys.length > 0 ? { droppedMacros: droppedMacroKeys } : {}),
+      };
     }
     return {
       ...compactPage(session, updated, target.base),
       droppedInlineComments: dropped.length > 0 ? dropped : undefined,
+      droppedMacros: droppedMacroKeys.length > 0 ? droppedMacroKeys : undefined,
     };
   },
 });

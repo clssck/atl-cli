@@ -8,7 +8,9 @@ import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
  * with entities already decoded; it is walked here without React.
  *
  * Choices worth knowing:
- * - Raw HTML (block or inline) is kept as literal text; `<br>` becomes a hardBreak and
+ * - Raw HTML (block or inline) is kept as literal text, except the `<!-- macro:<key> ... -->` and
+ *   `<!-- /macro:<key> -->` comments that `toMarkdown` writes for Confluence macros: markdown cannot
+ *   carry a macro, so they are dropped rather than saved as visible text. `<br>` becomes a hardBreak and
  *   `<sub>`, `<sup>`, `<u>`, `<strong>`, `<em>`, `<del>` become the matching marks.
  * - An image alone in its paragraph becomes `mediaSingle > media` (external URL, or
  *   `media:<id>[?collection=c]` -> file media; a link around it becomes a link mark on the media).
@@ -317,6 +319,9 @@ function autolinkHref(href: string, children: MdChild[]): string {
 
 const BR_HTML = /^<br\s*\/?>$/i;
 
+/** A macro comment as `toMarkdown` writes it: one line, `macro:<key>` or `/macro:<key>`. */
+const MACRO_COMMENT = /^<!--\s*\/?macro:[^\n]*-->$/;
+
 const MARK_TAG = /^<(\/?)(sub|sup|u|strong|em|del)>$/i;
 const TAG_MARKS: Record<string, AdfMark> = {
   sub: { type: "subsup", attrs: { type: "sub" } },
@@ -396,10 +401,17 @@ function inline(children: MdChild[], marks: AdfMark[], images: ImageMode): AdfNo
     }
   };
   const linked = marks.some((mark) => mark.type === "link");
+  let afterMacro = false;
   for (const child of linked ? children : linkBareUrls(children)) {
+    const trimLead = afterMacro;
+    afterMacro = false;
     if (typeof child === "string") {
       const tag = MARK_TAG.exec(child);
       const tagMark = tag === null ? undefined : TAG_MARKS[(tag[2] ?? "").toLowerCase()];
+      if (MACRO_COMMENT.test(child.trim())) {
+        afterMacro = true;
+        continue;
+      }
       if (BR_HTML.test(child)) {
         out.push({ type: "hardBreak" });
       } else if (tag !== null && tagMark !== undefined) {
@@ -410,7 +422,8 @@ function inline(children: MdChild[], marks: AdfMark[], images: ImageMode): AdfNo
               )
             : addMark(current, tagMark);
       } else {
-        text(child.replaceAll(/[ \t]*\n[ \t]*/g, " "));
+        const flat = child.replaceAll(/[ \t]*\n[ \t]*/g, " ");
+        text(trimLead ? flat.replace(/^ +/, "") : flat);
       }
       continue;
     }
@@ -595,7 +608,7 @@ function codeBlock(element: MdElement): AdfNode {
 function rawHtml(raw: string): AdfNode | undefined {
   const lines = raw.replace(/\s+$/, "").split("\n");
   const nodes: AdfNode[] = [];
-  for (const line of lines) {
+  for (const line of lines.filter((text) => !MACRO_COMMENT.test(text.trim()))) {
     if (nodes.length > 0) {
       nodes.push({ type: "hardBreak" });
     }
