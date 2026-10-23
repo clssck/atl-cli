@@ -167,6 +167,29 @@ describe("error mapping", () => {
     expect(error.exitCode).toBe(1);
   });
 
+  test("a 403 about a project permission names the permission, not the token", async () => {
+    const { client } = harness([
+      json(
+        { errorMessages: ["Nincs engedélye problémák törléséhez ebben a projektben."] },
+        { status: 403 },
+      ),
+    ]);
+    const error = await failure(client.request({ method: "DELETE", url: URL_ }));
+    expect(error.hint).toContain("lacks the permission");
+    expect(error.hint).toContain("Nincs engedélye");
+    expect(error.hint).not.toContain("scope");
+    expect(error.next).toEqual([]);
+  });
+
+  test("a 403 that names the scope keeps the scope hint and auth status", async () => {
+    const { client } = harness([
+      json({ message: "Forbidden; scope does not match" }, { status: 403 }),
+    ]);
+    const error = await failure(client.request({ method: "GET", url: URL_ }));
+    expect(error.hint).toContain("lacks the scope");
+    expect(error.next).toEqual([["atl", "auth", "status"]]);
+  });
+
   test("409 hint says to re-read and retry; exit code 3", async () => {
     const { client } = harness([json({}, { status: 409 })]);
     const error = await failure(client.request({ method: "PUT", url: URL_, body: {} }));

@@ -125,7 +125,10 @@ function run(
   flags: Record<string, unknown> = {},
   context: CommandContext = ctx(),
 ): Promise<unknown> {
-  return spec.run(context, { args, rest: [], flags });
+  // The parser delivers a variadic positional in `rest`; tests name it like any other argument.
+  const variadic = spec.args.find((arg) => arg.variadic === true)?.name;
+  const values = variadic === undefined ? undefined : args[variadic];
+  return spec.run(context, { args, rest: values === undefined ? [] : [values], flags });
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -981,6 +984,13 @@ describe("cql", () => {
       ],
       nextCursor: null,
     });
+  });
+
+  test("unquoted words, as the shell splits them, are sent as one query", async () => {
+    route("/rest/api/search", { results: [] });
+    const words = ["label", "=", "policy", "AND", "space", "=", "X"];
+    await cql.run(ctx(), { args: {}, rest: words, flags: {} });
+    expect(lastQuery().get("cql")).toBe("label = policy AND space = X");
   });
 
   test("excerpts are one line, decoded, and capped at 160 characters", async () => {
@@ -2158,6 +2168,19 @@ describe("cql and space listings", () => {
     expect(itemsOf(result)[0]).toMatchObject({ id: "1", ancestors: ["Home", "Docs"] });
   });
 
+  test("an attachment hit names the page it belongs to", async () => {
+    route("/rest/api/search", {
+      results: [
+        {
+          content: { id: "att7", type: "attachment", title: "a.csv" },
+          url: "/pages/viewpageattachments.action?pageId=5603349&preview=%2F5603349%2F7%2Fa.csv",
+        },
+      ],
+    });
+    const result = await run(cql, { query: "type = attachment" });
+    expect(itemsOf(result)[0]).toMatchObject({ id: "att7", pageId: "5603349" });
+  });
+
   test("a 400 on `title =` points at the exact-title lookup", async () => {
     route("/rest/api/search", failure(400, "illegal request"));
     const error = await rejection(run(cql, { query: 'title = "a \\"b\\""' }));
@@ -2165,6 +2188,23 @@ describe("cql and space listings", () => {
     expect(error.hint).toContain("space pages");
     const other = await rejection(run(cql, { query: 'text ~ "a \\"b\\""' }));
     expect(other.hint ?? "").not.toContain("space pages");
+  });
+
+  test("a deterministic server NullPointerException is an input error, not transient", async () => {
+    route(
+      "/rest/api/search",
+      failure(500, "java.lang.NullPointerException: query parameter is required."),
+    );
+    const error = await rejection(run(cql, { query: 'text ~ "\\""' }));
+    expect(error.code).toBe("invalid_cql");
+    expect(error.category).toBe("input");
+  });
+
+  test("an unquoted non-ASCII CQL value gets a quoting hint", async () => {
+    route("/rest/api/search", failure(400, "BadRequestException: Unrecognised clause at : nzgy"));
+    const error = await rejection(run(cql, { query: "label = pénzügy" }));
+    expect(error.status).toBe(400);
+    expect(error.hint).toContain('label = "pénzügy"');
   });
 
   test("space pages items always say their type, even when the API omits it", async () => {

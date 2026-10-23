@@ -66,7 +66,15 @@ async function run(
   rest: string[] = [],
 ): Promise<unknown> {
   const context = { ...ctx, ...overrides };
-  const result = await command(name).run(context, { args, rest, flags });
+  const spec = command(name);
+  // The parser delivers a variadic positional in `rest`; tests name it like any other argument.
+  const variadic = spec.args.find((arg) => arg.variadic === true)?.name;
+  const values = variadic === undefined ? undefined : args[variadic];
+  const result = await spec.run(context, {
+    args,
+    rest: values === undefined ? rest : [values],
+    flags,
+  });
   return context.full ? result : prune(result);
 }
 
@@ -480,6 +488,29 @@ describe("search", () => {
     expect(calls[0]?.query.get("expand")).toBe("content.ancestors");
   });
 
+  test("an attachment hit names the page it belongs to", async () => {
+    respond({
+      [CONFLUENCE_SEARCH]: {
+        results: [
+          {
+            content: { id: "att7", type: "attachment", title: "receipt.json" },
+            url: "/pages/viewpageattachments.action?pageId=5308439&preview=%2F5308439%2F7%2Freceipt.json",
+            resultGlobalContainer: { displayUrl: "/spaces/NMCORP" },
+          },
+          {
+            content: { id: "1", type: "page", title: "P" },
+            url: "/spaces/NMCORP/pages/1?pageId=9",
+          },
+        ],
+      },
+    });
+    const items = itemsOf(await run("search", { query: "receipt" }, { product: "confluence" }));
+    expect(items.map((item) => [item.id, item.pageId])).toEqual([
+      ["att7", "5308439"],
+      ["1", undefined],
+    ]);
+  });
+
   test("upper-case AND/OR/NOT and a leading dash in the text are literal in CQL and JQL", async () => {
     respond({
       [CONFLUENCE_SEARCH]: { results: [pageHit("1", "A")] },
@@ -495,6 +526,37 @@ describe("search", () => {
     respond({ [CONFLUENCE_SEARCH]: { results: [pageHit("1", "A")] } });
     await run("search", { query: "C:\\dir\\" }, { product: "confluence" });
     expect(calls[0]?.query.get("cql")).toBe('text ~ "C:\\\\dir\\\\ "');
+  });
+
+  test("an unpaired quote is dropped; a balanced pair stays a phrase", async () => {
+    respond({
+      [CONFLUENCE_SEARCH]: { results: [pageHit("1", "A")] },
+      [JIRA_SEARCH]: { issues: [issueHit("10", "ABC-1")], isLast: true },
+    });
+    const cqls: (string | null | undefined)[] = [];
+    for (const query of ['release"', '"release', '"release notes"', 'say \\"hi', 'a "b" c"']) {
+      await run("search", { query }, { product: "confluence" });
+      cqls.push(calls.at(-1)?.query.get("cql"));
+    }
+    expect(cqls).toEqual([
+      'text ~ "release"',
+      'text ~ "release"',
+      'text ~ "\\"release notes\\""',
+      'text ~ "say \\\\\\"hi"',
+      'text ~ "a \\"b\\" c"',
+    ]);
+    await run("search", { query: 'x"' }, { product: "jira" });
+    expect(calls.at(-1)?.query.get("jql")).toBe('text ~ "x"');
+  });
+
+  test("a query of only quotes and blanks fails locally as empty_query", async () => {
+    respond({});
+    for (const query of ['"', '" "', '""', ' " ']) {
+      const error = await failure(run("search", { query }));
+      expect(error.code).toBe("empty_query");
+      expect(error.category).toBe("input");
+    }
+    expect(calls).toHaveLength(0);
   });
 
   test("hit titles are the stored text, not the escaped HTML of the top-level title", async () => {

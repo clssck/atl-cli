@@ -67,8 +67,11 @@ function isInline(node: AdfNode): boolean {
   return Object.hasOwn(INLINE_TYPES, node.type);
 }
 
+/** Markdown ignores spaces and newlines at the edges of a block; a no-break space is content. */
+const EDGE_BLANKS = /^[ \t\r\n]+|[ \t\r\n]+$/g;
+
 export function adfToMarkdown(doc: AdfDoc): string {
-  return renderBlocks(doc.content ?? [], BLOCK_CTX, false).trim();
+  return renderBlocks(doc.content ?? [], BLOCK_CTX, false).replaceAll(EDGE_BLANKS, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -345,23 +348,103 @@ function withoutMark(item: Item, key: string): Item {
   return { ...item, marks: item.marks.filter((mark) => markKey(mark) !== key) };
 }
 
+/** The characters next to a marked stretch, and whether `_` is the em delimiter to try first. */
+interface Around {
+  before: string;
+  after: string;
+  underscore: boolean;
+}
+
+/** CommonMark treats ASCII punctuation and Unicode punctuation and symbols alike. */
+const PUNCTUATION = /^[\p{P}\p{S}]$/u;
+
+function isSpace(char: string): boolean {
+  return char === "" || /^\s$/u.test(char);
+}
+
+function isPunct(char: string): boolean {
+  return PUNCTUATION.test(char);
+}
+
+function firstChar(text: string): string {
+  return Array.from(text.slice(0, 2))[0] ?? "";
+}
+
+function lastChar(text: string): string {
+  return Array.from(text.slice(-2)).at(-1) ?? "";
+}
+
+/** Can a delimiter run between `before` and `after` open (left-flanking) or close (right-flanking)? */
+function flanking(before: string, after: string): { left: boolean; right: boolean } {
+  return {
+    left: !isSpace(after) && (!isPunct(after) || isSpace(before) || isPunct(before)),
+    right: !isSpace(before) && (!isPunct(before) || isSpace(after) || isPunct(after)),
+  };
+}
+
+/**
+ * Would `delimiter` around `core` re-parse as the mark? `_` may not work inside a word, and `~~`
+ * (md4c) needs a non-alphanumeric character on both outer sides. When it would not, the caller
+ * writes an HTML tag, which the reader understands anywhere.
+ */
+function canDelimit(
+  delimiter: "*" | "_" | "~",
+  before: string,
+  core: string,
+  after: string,
+): boolean {
+  const open = flanking(before, firstChar(core));
+  const close = flanking(lastChar(core), after);
+  if (!open.left || !close.right) {
+    return false;
+  }
+  if (delimiter === "_") {
+    return (!open.right || isPunct(before)) && (!close.left || isPunct(after));
+  }
+  return delimiter === "*" || (!ALNUM.test(before) && !ALNUM.test(after));
+}
+
+function delimited(
+  lead: string,
+  delimiter: string,
+  tag: string,
+  valid: boolean,
+  core: string,
+  trail: string,
+): string {
+  return valid
+    ? `${lead}${delimiter}${core}${delimiter}${trail}`
+    : `${lead}<${tag}>${core}</${tag}>${trail}`;
+}
+
 function wrapMark(
   mark: AdfMark,
   inner: string,
   plainText: string | undefined,
-  emDelimiter: string,
+  around: Around,
 ): string {
   const [, lead = "", core = "", trail = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(inner) ?? [];
   if (core === "") {
     return inner;
   }
+  const before = lead === "" ? around.before : lastChar(lead);
+  const after = trail === "" ? around.after : firstChar(trail);
   switch (mark.type) {
     case "strong":
-      return `${lead}**${core}**${trail}`;
+      return delimited(lead, "**", "strong", canDelimit("*", before, core, after), core, trail);
     case "strike":
-      return `${lead}~~${core}~~${trail}`;
-    case "em":
-      return `${lead}${emDelimiter}${core}${emDelimiter}${trail}`;
+      return delimited(lead, "~~", "del", canDelimit("~", before, core, after), core, trail);
+    case "em": {
+      const delimiter = around.underscore ? "_" : "*";
+      return delimited(
+        lead,
+        delimiter,
+        "em",
+        canDelimit(delimiter, before, core, after),
+        core,
+        trail,
+      );
+    }
     case "link": {
       const href = str(mark.attrs?.href) ?? "";
       if (plainText === href && /^[a-z][a-z0-9+.-]*:[^\s<>]+$/i.test(href)) {
@@ -382,12 +465,28 @@ function wrapMark(
   }
 }
 
+/** The first character an item is rendered with: what follows a marked stretch before it. */
+function leadChar(item: Item): string {
+  if (item.kind === "raw") {
+    return firstChar(item.value);
+  }
+  if (item.kind === "break") {
+    return "\\";
+  }
+  if (item.marks.some((mark) => mark.type === "code")) {
+    return "`";
+  }
+  const first = firstChar(item.value);
+  return groupMarks(item).length > 0 && !isSpace(first) ? "*" : first;
+}
+
 /**
  * Render a break-free run. Adjacent items sharing a mark are wrapped once; the mark covering the
- * longest stretch is outermost so `**a_b_**` style nesting stays minimal. `before` is the last
- * character already emitted, used to avoid `***` ambiguity between strong and em.
+ * longest stretch is outermost so `**a_b_**` style nesting stays minimal. `before` and `after` are
+ * the characters next to the run, used to avoid `***` ambiguity between strong and em and to check
+ * that a delimiter can open and close there.
  */
-function renderRun(items: Item[], ctx: Ctx, before: string): string {
+function renderRun(items: Item[], ctx: Ctx, before: string, after: string): string {
   let out = "";
   let index = 0;
   while (index < items.length) {
@@ -396,7 +495,7 @@ function renderRun(items: Item[], ctx: Ctx, before: string): string {
       break;
     }
     const marks = groupMarks(first);
-    const prev = out.at(-1) ?? before;
+    const prev = lastChar(out) || before;
     const [firstMark] = marks;
     if (firstMark === undefined) {
       if (first.kind === "text") {
@@ -432,13 +531,17 @@ function renderRun(items: Item[], ctx: Ctx, before: string): string {
     const slice = items.slice(index, index + bestLength).map((item) => withoutMark(item, key));
     const innerBefore =
       best.type === "strong" ? "*" : best.type === "strike" ? "~" : best.type === "link" ? "[" : "";
-    const inner = renderRun(slice, ctx, innerBefore);
+    const inner = renderRun(slice, ctx, innerBefore, "*");
     const next = items[index + bestLength];
-    const emDelimiter = prev === "*" || (next !== undefined && hasMark(next, "strong")) ? "_" : "*";
+    const starBefore = prev === "*" && !out.endsWith("\\*");
     const plain = slice.every((item) => item.kind === "text" && item.marks.length === 0)
       ? slice.map((item) => (item.kind === "text" ? item.value : "")).join("")
       : undefined;
-    out += wrapMark(best, inner, plain, emDelimiter);
+    out += wrapMark(best, inner, plain, {
+      before: prev,
+      after: next === undefined ? after : leadChar(next),
+      underscore: starBefore || (next !== undefined && hasMark(next, "strong")),
+    });
     index += bestLength;
   }
   return out;
@@ -456,22 +559,22 @@ function renderInline(nodes: AdfNode[], ctx: Ctx): string {
   const breakText = ctx.inline === "table" ? "<br>" : ctx.inline === "heading" ? " " : "\\\n";
   let out = "";
   let run: Item[] = [];
-  const flush = (): void => {
+  const flush = (after: string): void => {
     if (run.length > 0) {
-      out += renderRun(run, ctx, out.at(-1) ?? "");
+      out += renderRun(run, ctx, lastChar(out), after);
     }
     run = [];
   };
   for (const item of items) {
     if (item.kind === "break") {
-      flush();
+      flush(firstChar(breakText));
       out += breakText;
     } else {
       run.push(item);
     }
   }
-  flush();
-  return out.trim();
+  flush("");
+  return out.replaceAll(EDGE_BLANKS, "");
 }
 
 // ---------------------------------------------------------------------------

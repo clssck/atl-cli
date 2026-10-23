@@ -10,10 +10,14 @@ import {
   compactComment,
   compactIssue,
   DEFAULT_ISSUE_FIELDS,
+  DIRECT_FIELD,
+  type FieldRecord,
+  fetchFields,
   ISSUE_ARG,
   issueSession,
   jiraDeps,
   projectKey,
+  resolveField,
   resolveIssueTypeId,
   userName,
   type JiraComment,
@@ -46,11 +50,14 @@ import {
 const FIELD_FLAGS = {
   set: Type.Optional(
     Type.Array(Type.String(), {
-      description: "field=value; value is JSON when it parses, else a string. Repeatable",
+      description:
+        "field=value; the field is an id or display name (case-insensitive); the value is JSON when it parses, else text shaped to the field type (number, option, user, sprint id). Repeatable",
     }),
   ),
   fieldsFile: Type.Optional(
-    Type.String({ description: "JSON file with an object of fields to merge (before --set)" }),
+    Type.String({
+      description: "JSON file with an object of fields (ids or names) to merge (before --set)",
+    }),
   ),
 };
 
@@ -100,8 +107,81 @@ function assigneeValue(raw: string): { accountId: string | null } {
   return { accountId: text };
 }
 
+const NUMBER_TEXT = /^-?\d+(?:[.,]\d+)?$/;
+
+/** Comma-separated `--set` text (or a JSON array) as a list of strings. */
+function listOf(json: unknown, text: string): unknown[] {
+  return Array.isArray(json)
+    ? json
+    : text
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part !== "");
+}
+
+/**
+ * A field looked up by name takes its value in the shape its schema needs: numbers from text
+ * (`.` or `,` decimals), `{value}` for options, account ids for users, a sprint id for the
+ * sprint field. Explicit JSON objects, arrays and `null` pass through; undefined means "no
+ * shaping applies".
+ */
+function shapedValue(
+  field: FieldRecord,
+  raw: string,
+  parsed: { value: unknown } | undefined,
+): { value: unknown } | undefined {
+  const { type, items, custom } = field.schema ?? {};
+  const json = parsed?.value;
+  const text = typeof json === "string" ? json : raw.trim();
+  if (json === null || (isRecord(json) && !Array.isArray(json))) {
+    return undefined;
+  }
+  if (custom?.endsWith(":gh-sprint") === true) {
+    if (!/^\d+$/.test(text)) {
+      throw inputError(
+        "invalid_sprint",
+        `Field "${field.name}" takes a numeric sprint id, got "${raw}"`,
+        "Pass the sprint id (see `atl board sprints <board>`), or null to clear.",
+      );
+    }
+    return { value: Number(text) };
+  }
+  if (type === "number") {
+    if (typeof json === "number") {
+      return undefined;
+    }
+    if (!NUMBER_TEXT.test(text)) {
+      throw inputError(
+        "invalid_field_value",
+        `Field "${field.name}" is a number, got "${raw}"`,
+        "Pass digits with an optional . or , decimal part.",
+      );
+    }
+    return { value: Number(text.replace(",", ".")) };
+  }
+  if (type === "option") {
+    return { value: { value: text } };
+  }
+  if (type === "array" && items === "option") {
+    return {
+      value: listOf(json, text).map((item) => (typeof item === "string" ? { value: item } : item)),
+    };
+  }
+  if (type === "user" && (parsed === undefined || typeof json === "string")) {
+    return { value: assigneeValue(text) };
+  }
+  if (type === "array" && items === "user") {
+    return {
+      value: listOf(json, text).map((item) =>
+        typeof item === "string" ? assigneeValue(item) : item,
+      ),
+    };
+  }
+  return undefined;
+}
+
 /** One `--set field=value` value: JSON when it parses, else a string; summary is always text. */
-function fieldValue(name: string, raw: string): unknown {
+function fieldValue(name: string, raw: string, field: FieldRecord | undefined): unknown {
   if (name === "summary") {
     return raw;
   }
@@ -115,46 +195,53 @@ function fieldValue(name: string, raw: string): unknown {
     }
     return markdownToAdf(raw);
   }
+  const shaped = field === undefined ? undefined : shapedValue(field, raw, parsed);
+  if (shaped !== undefined) {
+    return shaped.value;
+  }
   return parsed === undefined ? raw : parsed.value;
 }
 
-/** Parse repeated `--set field=value` entries; the last entry for a field wins. */
-function parseSet(entries: readonly string[]): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const entry of entries) {
+/**
+ * Merge `--fields-file`, then `--set`, then the dedicated flags. Keys may be field ids or names;
+ * names resolve through the site's field list (read once, only when a key needs it). A dedicated
+ * flag colliding with a generic source is an input error rather than a silent override.
+ */
+async function buildFields(
+  session: Session,
+  flags: { set?: readonly string[] | undefined; fieldsFile?: string | undefined },
+  dedicated: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let catalog: Promise<FieldRecord[]> | undefined;
+  const lookup = async (key: string): Promise<{ id: string; field?: FieldRecord }> => {
+    if (DIRECT_FIELD.test(key)) {
+      return { id: key };
+    }
+    catalog ??= fetchFields(session);
+    const field = resolveField(await catalog, key);
+    return { id: field.id, field };
+  };
+  const fromFile =
+    flags.fieldsFile === undefined ? {} : await readJsonObject(flags.fieldsFile, "--fields-file");
+  const merged: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fromFile)) {
+    const { id } = await lookup(key);
+    merged[id] =
+      typeof value === "string" && RICH_TEXT_FIELDS.has(id) ? markdownToAdf(value) : value;
+  }
+  for (const entry of flags.set ?? []) {
     const equals = entry.indexOf("=");
     const name = equals === -1 ? "" : entry.slice(0, equals).trim();
     if (name === "") {
       throw inputError(
         "invalid_set",
         `--set expects field=value, got "${entry}"`,
-        'Example: --set labels=\'["a","b"]\' or --set priority=\'{"name":"High"}\'.',
+        'Example: --set labels=\'["a","b"]\' or --set "Story point estimate=3".',
       );
     }
-    fields[name] = fieldValue(name, entry.slice(equals + 1));
+    const { id, field } = await lookup(name);
+    merged[id] = fieldValue(id, entry.slice(equals + 1), field);
   }
-  return fields;
-}
-
-/**
- * Merge `--fields-file`, then `--set`, then the dedicated flags. A dedicated flag colliding with a
- * generic source is an input error rather than a silent override.
- */
-async function buildFields(
-  flags: { set?: readonly string[] | undefined; fieldsFile?: string | undefined },
-  dedicated: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const fromFile =
-    flags.fieldsFile === undefined ? {} : await readJsonObject(flags.fieldsFile, "--fields-file");
-  const merged: Record<string, unknown> = {
-    ...Object.fromEntries(
-      Object.entries(fromFile).map(([name, value]) => [
-        name,
-        typeof value === "string" && RICH_TEXT_FIELDS.has(name) ? markdownToAdf(value) : value,
-      ]),
-    ),
-    ...parseSet(flags.set ?? []),
-  };
   for (const [name, value] of Object.entries(dedicated)) {
     if (Object.hasOwn(merged, name)) {
       throw inputError(
@@ -337,8 +424,75 @@ async function resolveTransition(
   );
 }
 
-/** Jira duration: space-separated `<number><w|d|h|m>` tokens, e.g. `2h 30m`, `1.5h`. */
-const JIRA_DURATION = /^\d+(\.\d+)?[wdhm](\s+\d+(\.\d+)?[wdhm])*$/;
+/** One duration token: `<number><w|d|h|m|s>`; `.` and `,` both start the decimals. */
+const DURATION_TOKEN = /^(\d+(?:[.,]\d+)?)([wdhms])$/;
+
+interface TimeTrackingConfiguration {
+  timeTrackingConfiguration?: { workingHoursPerDay?: number; workingDaysPerWeek?: number };
+}
+
+function workingTimeUnavailable(cause: unknown, detail: string): AtlError {
+  return new AtlError(`Cannot convert d/w durations: ${detail}`, {
+    code: "working_time_unavailable",
+    category: "input",
+    hint: "Give the time in h/m instead, e.g. 4h for half a working day.",
+    cause,
+  });
+}
+
+/** Seconds in a working day and week, from the site's time tracking settings. */
+async function workingSeconds(session: Session): Promise<{ d: number; w: number }> {
+  let config: TimeTrackingConfiguration;
+  try {
+    config = await session.http.request<TimeTrackingConfiguration>({
+      method: "GET",
+      url: session.jiraUrl("/rest/api/3/configuration"),
+    });
+  } catch (error) {
+    if (!(error instanceof AtlError)) {
+      throw error;
+    }
+    throw workingTimeUnavailable(
+      error,
+      `the site's working hours are unreadable (${error.message})`,
+    );
+  }
+  const hours = config.timeTrackingConfiguration?.workingHoursPerDay;
+  const days = config.timeTrackingConfiguration?.workingDaysPerWeek;
+  if (typeof hours !== "number" || typeof days !== "number" || hours <= 0 || days <= 0) {
+    throw workingTimeUnavailable(
+      undefined,
+      "the site returned no working hours per day or days per week",
+    );
+  }
+  return { d: hours * 3600, w: hours * days * 3600 };
+}
+
+/**
+ * A Jira duration (`2h 30m`, `1.5h`, `0,5d`) in seconds, computed here so the decimal separator
+ * never reaches a locale-specific site. h/m/s are exact; d/w use the site's working time, read
+ * only when one of them is present.
+ */
+async function durationSeconds(session: Session, text: string): Promise<number> {
+  const parts = text.split(/\s+/).map((token) => DURATION_TOKEN.exec(token));
+  const valid = parts.flatMap((match) =>
+    match?.[1] === undefined || match[2] === undefined
+      ? []
+      : [{ amount: Number(match[1].replace(",", ".")), unit: match[2] }],
+  );
+  if (valid.length !== parts.length) {
+    throw inputError(
+      "invalid_time_spent",
+      `Invalid time spent "${text}"`,
+      'Use w/d/h/m units, e.g. "2h 30m", "1d", "1.5h" or "1,5h".',
+    );
+  }
+  const working = valid.some((p) => p.unit === "d" || p.unit === "w")
+    ? await workingSeconds(session)
+    : { d: 0, w: 0 };
+  const unitSeconds: Record<string, number> = { s: 1, m: 60, h: 3600, ...working };
+  return Math.round(valid.reduce((sum, p) => sum + p.amount * (unitSeconds[p.unit] ?? 0), 0));
+}
 
 /** ISO 8601 date or date-time with optional seconds, fraction and offset. */
 const ISO_INSTANT =
@@ -406,7 +560,7 @@ const issueCreate = defineCommand({
     const { flags } = input;
     const description = await loadBody(flags, { allowStorage: false });
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
-    const fields = await buildFields(flags, {
+    const fields = await buildFields(session, flags, {
       project: projectRef(flags.project),
       issuetype: { id: await resolveIssueTypeId(session, flags.project, flags.type) },
       summary: flags.summary,
@@ -478,12 +632,12 @@ const issueCreate = defineCommand({
 });
 
 // ---------------------------------------------------------------------------
-// issue.edit
+// issue.update
 // ---------------------------------------------------------------------------
 
-const issueEdit = defineCommand({
-  name: "issue.edit",
-  summary: "Edit issue fields and return the refreshed issue",
+const issueUpdate = defineCommand({
+  name: "issue.update",
+  summary: "Update issue fields and return the refreshed issue",
   mcpTools: ["editJiraIssue"],
   args: [ISSUE_ARG],
   flags: Type.Object({
@@ -495,16 +649,16 @@ const issueEdit = defineCommand({
   }),
   sideEffects: "write",
   examples: [
-    'atl issue edit ABC-123 --summary "New title"',
-    "atl issue edit ABC-123 --body 'Updated steps to reproduce'",
-    "atl issue edit ABC-123 --file desc.md --set labels='[\"web\"]'",
-    'atl issue edit ABC-123 --set resolution=null --set priority=\'{"name":"High"}\' --plan',
+    'atl issue update ABC-123 --summary "New title"',
+    "atl issue update ABC-123 --body 'Updated steps to reproduce'",
+    "atl issue update ABC-123 --file desc.md --set labels='[\"web\"]'",
+    'atl issue update ABC-123 --set resolution=null --set priority=\'{"name":"High"}\' --plan',
   ],
   async run(ctx, input) {
     const { flags } = input;
     const description = await loadBody(flags, { allowStorage: false });
     const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
-    const fields = await buildFields(flags, {
+    const fields = await buildFields(session, flags, {
       ...(flags.summary === undefined ? {} : { summary: flags.summary }),
       ...(description === undefined ? {} : { description: jiraBody(description) }),
       ...(flags.assignee === undefined ? {} : { assignee: assigneeValue(flags.assignee) }),
@@ -635,7 +789,7 @@ const issueMove = defineCommand({
     const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
     const wanted = input.args.transition ?? "";
     const transition = await resolveTransition(session, key, rawKey, wanted);
-    const fields = await buildFields(flags, {});
+    const fields = await buildFields(session, flags, {});
     const update =
       flags.updateFile === undefined ? {} : await readJsonObject(flags.updateFile, "--update-file");
     const comment = await loadComment(flags);
@@ -758,13 +912,7 @@ const issueLog = defineCommand({
         'Pass e.g. "2h 30m".',
       );
     }
-    if (timeSpent !== "" && !JIRA_DURATION.test(timeSpent)) {
-      throw inputError(
-        "invalid_time_spent",
-        `Invalid time spent "${timeSpent}"`,
-        'Use Jira duration units w/d/h/m, e.g. "2h 30m", "1d", or "1.5h".',
-      );
-    }
+    const seconds = timeSpent === "" ? undefined : await durationSeconds(session, timeSpent);
     const visibility = visibilityOf(flags);
     const comment = await loadComment(flags);
     const worklog = await sendWrite<Worklog>(
@@ -776,7 +924,7 @@ const issueLog = defineCommand({
           `/rest/api/3/issue/${key}/worklog${flags.edit === undefined ? "" : `/${encodeURIComponent(flags.edit)}`}`,
         ),
         body: {
-          ...(timeSpent === "" ? {} : { timeSpent }),
+          ...(seconds === undefined ? {} : { timeSpentSeconds: seconds }),
           ...(flags.started === undefined ? {} : { started: jiraTimestamp(flags.started) }),
           ...(comment === undefined ? {} : { comment }),
           ...(visibility === undefined ? {} : { visibility }),
@@ -1468,7 +1616,7 @@ const issueNotify = defineCommand({
 
 export const jiraWriteCommands: readonly CommandSpec[] = [
   issueCreate,
-  issueEdit,
+  issueUpdate,
   issueComment,
   issueMove,
   issueLog,

@@ -386,7 +386,7 @@ describe("--set parsing", () => {
     });
     const adf = markdownToAdf("Direct");
     await run(
-      "issue.edit",
+      "issue.update",
       { issue: "ABC-1" },
       { set: ["description=Some *text*", "summary=123"] },
     );
@@ -394,7 +394,7 @@ describe("--set parsing", () => {
       fields: { description: markdownToAdf("Some *text*"), summary: "123" },
     });
     sent = [];
-    await run("issue.edit", { issue: "ABC-1" }, { set: [`description=${JSON.stringify(adf)}`] });
+    await run("issue.update", { issue: "ABC-1" }, { set: [`description=${JSON.stringify(adf)}`] });
     expect(writes()[0]?.body).toEqual({ fields: { description: adf } });
   });
 
@@ -404,10 +404,10 @@ describe("--set parsing", () => {
       "GET /rest/api/3/issue/ABC-1": ok(REFRESHED),
     });
     const id = "62a219658783e7006f627f3b";
-    await run("issue.edit", { issue: "ABC-1" }, { set: [`assignee=${id}`] });
-    await run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=none"] });
-    await run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=auto"] });
-    await run("issue.edit", { issue: "ABC-1" }, { set: ['assignee={"accountId":"x"}'] });
+    await run("issue.update", { issue: "ABC-1" }, { set: [`assignee=${id}`] });
+    await run("issue.update", { issue: "ABC-1" }, { set: ["assignee=none"] });
+    await run("issue.update", { issue: "ABC-1" }, { set: ["assignee=auto"] });
+    await run("issue.update", { issue: "ABC-1" }, { set: ['assignee={"accountId":"x"}'] });
     expect(writes().map((w) => w.body)).toEqual([
       { fields: { assignee: { accountId: id } } },
       { fields: { assignee: { accountId: null } } },
@@ -416,7 +416,7 @@ describe("--set parsing", () => {
     ]);
     sent = [];
     const error = await failure(
-      run("issue.edit", { issue: "ABC-1" }, { set: ["assignee=nobody"] }),
+      run("issue.update", { issue: "ABC-1" }, { set: ["assignee=nobody"] }),
     );
     expect(error.code).toBe("invalid_assignee");
     expect(sent).toEqual([]);
@@ -424,7 +424,7 @@ describe("--set parsing", () => {
 
   test("an entry without field=value is rejected", async () => {
     serve({});
-    const error = await failure(run("issue.edit", { issue: "ABC-1" }, { set: ["labels"] }));
+    const error = await failure(run("issue.update", { issue: "ABC-1" }, { set: ["labels"] }));
     expect(error.code).toBe("invalid_set");
     expect(sent).toEqual([]);
   });
@@ -432,12 +432,234 @@ describe("--set parsing", () => {
   test("--fields-file must hold a JSON object", async () => {
     serve({});
     const bad = await file("bad.json", "[1,2]");
-    const error = await failure(run("issue.edit", { issue: "ABC-1" }, { fieldsFile: bad }));
+    const error = await failure(run("issue.update", { issue: "ABC-1" }, { fieldsFile: bad }));
     expect(error.code).toBe("invalid_json_file");
   });
 });
 
-describe("issue.edit", () => {
+describe("--set and --fields-file field names", () => {
+  const FIELD_ROUTE = "GET /rest/api/3/field";
+  const SPRINT = "com.pyxis.greenhopper.jira:gh-sprint";
+  const FIELDS = ok([
+    {
+      id: "description",
+      name: "Leírás",
+      untranslatedName: "Description",
+      clauseNames: ["description"],
+      schema: { type: "string" },
+    },
+    {
+      id: "priority",
+      name: "Prioritás",
+      untranslatedName: "Priority",
+      clauseNames: ["priority"],
+      schema: { type: "priority" },
+    },
+    {
+      id: "customfield_10016",
+      name: "Story point estimate",
+      custom: true,
+      clauseNames: ["cf[10016]", "Story point estimate"],
+      schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" },
+    },
+    {
+      id: "customfield_10020",
+      name: "Sprint",
+      custom: true,
+      schema: { type: "array", items: "json", custom: SPRINT },
+    },
+    { id: "customfield_10030", name: "Severity", custom: true, schema: { type: "option" } },
+    {
+      id: "customfield_10031",
+      name: "Platforms",
+      custom: true,
+      schema: { type: "array", items: "option" },
+    },
+    { id: "customfield_10032", name: "Approver", custom: true, schema: { type: "user" } },
+    {
+      id: "customfield_10033",
+      name: "Reviewers",
+      custom: true,
+      schema: { type: "array", items: "user" },
+    },
+    { id: "customfield_10034", name: "Notes", custom: true, schema: { type: "string" } },
+    { id: "customfield_10050", name: "Owner", custom: true, schema: { type: "string" } },
+    { id: "customfield_10051", name: "owner", custom: true, schema: { type: "string" } },
+  ]);
+  const ACCOUNT = "62a219658783e7006f627f3b";
+
+  /** The create-request `fields` for `--set` entries on a site that serves the field list. */
+  async function named(set: string[], fieldsFile?: string): Promise<Record<string, unknown>> {
+    sent = [];
+    serve({
+      [FIELD_ROUTE]: FIELDS,
+      [TYPES_ROUTE]: TYPES,
+      "POST /rest/api/3/issue": created({ id: "1", key: "ABC-1" }),
+    });
+    await run("issue.create", {}, { project: "ABC", type: "Task", summary: "S", set, fieldsFile });
+    const fields = bodyField(0, "fields");
+    if (!isRecord(fields)) {
+      throw new Error("create request carried no fields");
+    }
+    return fields;
+  }
+
+  test("a display name, localized name or id resolves case-insensitively to the field id", async () => {
+    const fields = await named([
+      "story POINT estimate=3",
+      "cf[10016]=4",
+      "Prioritás=High",
+      "Notes=n1",
+    ]);
+    expect(fields).toMatchObject({
+      customfield_10016: 4,
+      priority: "High",
+      customfield_10034: "n1",
+    });
+  });
+
+  test("a name that resolves to a rich text field is converted to ADF", async () => {
+    const fields = await named(["Leírás=Some **body**"]);
+    expect(fields.description).toEqual(markdownToAdf("Some **body**"));
+  });
+
+  test("--fields-file keys accept names and keep their JSON values", async () => {
+    const extra = await file("names.json", '{"Severity":{"id":"7"},"Leírás":"Plain"}');
+    const fields = await named([], extra);
+    expect(fields).toMatchObject({
+      customfield_10030: { id: "7" },
+      description: markdownToAdf("Plain"),
+    });
+  });
+
+  test("custom field ids and common system fields are sent as typed without reading the field list", async () => {
+    const fields = await fieldsOf(["customfield_10016=3", "labels=x", "priority=High"]);
+    expect(fields).toMatchObject({ customfield_10016: 3, labels: "x", priority: "High" });
+    expect(sent.map((s) => s.path)).not.toContain("/rest/api/3/field");
+  });
+
+  test("the field list is read once however many names are set", async () => {
+    await named(["Story point estimate=1", "Severity=High", "Notes=x"]);
+    expect(sent.filter((s) => s.path === "/rest/api/3/field")).toHaveLength(1);
+  });
+
+  test("an unknown name is unknown_field with close matches; nothing is sent", async () => {
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", set: ["Story point=3"] },
+      ),
+    );
+    expect(error.code).toBe("unknown_field");
+    expect(error.message).toContain("customfield_10016 (Story point estimate)");
+    expect(writes()).toEqual([]);
+  });
+
+  test("a name shared by several fields is ambiguous_field listing the ids", async () => {
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run("issue.create", {}, { project: "ABC", type: "Task", summary: "S", set: ["Owner=x"] }),
+    );
+    expect(error.code).toBe("ambiguous_field");
+    expect(error.message).toContain("customfield_10050");
+    expect(error.message).toContain("customfield_10051");
+  });
+
+  test.each([
+    ["Story point estimate=3", 3],
+    ["Story point estimate=3,5", 3.5],
+    ["Story point estimate=-2.25", -2.25],
+    ["Story point estimate=null", null],
+  ])("number field %p is sent as %p", async (entry, value) => {
+    expect((await named([entry])).customfield_10016).toBe(value);
+  });
+
+  test("a non-numeric value for a number field is invalid_field_value", async () => {
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", set: ["Story point estimate=lots"] },
+      ),
+    );
+    expect(error.code).toBe("invalid_field_value");
+  });
+
+  test("option fields take {value}; explicit JSON objects pass through", async () => {
+    expect((await named(["Severity=High"])).customfield_10030).toEqual({ value: "High" });
+    expect((await named(['Severity={"id":"10001"}'])).customfield_10030).toEqual({ id: "10001" });
+  });
+
+  test("multi-option fields take a comma list or a JSON array of names", async () => {
+    expect((await named(["Platforms=web, ios"])).customfield_10031).toEqual([
+      { value: "web" },
+      { value: "ios" },
+    ]);
+    expect((await named(['Platforms=["web"]'])).customfield_10031).toEqual([{ value: "web" }]);
+    expect((await named(['Platforms=[{"id":"1"}]'])).customfield_10031).toEqual([{ id: "1" }]);
+  });
+
+  test("user fields go through the assignee validation", async () => {
+    expect((await named([`Approver=${ACCOUNT}`])).customfield_10032).toEqual({
+      accountId: ACCOUNT,
+    });
+    expect((await named(["Approver=none"])).customfield_10032).toEqual({ accountId: null });
+    expect((await named([`Reviewers=${ACCOUNT}`])).customfield_10033).toEqual([
+      { accountId: ACCOUNT },
+    ]);
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", set: ["Approver=Ada"] },
+      ),
+    );
+    expect(error.code).toBe("invalid_assignee");
+  });
+
+  test("the sprint field takes a numeric sprint id", async () => {
+    expect((await named(["Sprint=12"])).customfield_10020).toBe(12);
+    expect((await named(["Sprint=null"])).customfield_10020).toBeNull();
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", set: ["Sprint=Sprint 4"] },
+      ),
+    );
+    expect(error.code).toBe("invalid_sprint");
+  });
+
+  test("issue.update resolves names too and refreshes the resolved field id", async () => {
+    serve({
+      [FIELD_ROUTE]: FIELDS,
+      "PUT /rest/api/3/issue/ABC-123": noContent,
+      "GET /rest/api/3/issue/ABC-123": ok(REFRESHED),
+    });
+    await run("issue.update", { issue: "ABC-123" }, { set: ["Story point estimate=8"] });
+    expect(writes()[0]?.body).toEqual({ fields: { customfield_10016: 8 } });
+    expect(sent.at(-1)?.query.get("fields")).toContain("customfield_10016");
+  });
+
+  test("a name resolving to a dedicated flag's field is a duplicate_field error", async () => {
+    serve({ [FIELD_ROUTE]: FIELDS, [TYPES_ROUTE]: TYPES });
+    const error = await failure(
+      run(
+        "issue.create",
+        {},
+        { project: "ABC", type: "Task", summary: "S", body: "x", set: ["Leírás=y"] },
+      ),
+    );
+    expect(error.code).toBe("duplicate_field");
+  });
+});
+
+describe("issue.update", () => {
   test("PUTs the fields, then GETs and returns the compact refreshed issue", async () => {
     serve({
       "PUT /rest/api/3/issue/ABC-123": noContent,
@@ -445,7 +667,7 @@ describe("issue.edit", () => {
     });
     const desc = await file("desc.md", "Body");
     const result = await run(
-      "issue.edit",
+      "issue.update",
       { issue: "ABC-123" },
       {
         summary: "New title",
@@ -481,11 +703,14 @@ describe("issue.edit", () => {
   test("--plan returns the PUT plan and sends nothing", async () => {
     serve({});
     const plan = await run(
-      "issue.edit",
+      "issue.update",
       { issue: "ABC-123" },
       { summary: "New title" },
       {
-        ctx: { plan: true, argv: ["issue", "edit", "ABC-123", "--summary", "New title", "--plan"] },
+        ctx: {
+          plan: true,
+          argv: ["issue", "update", "ABC-123", "--summary", "New title", "--plan"],
+        },
       },
     );
     expect(sent).toEqual([]);
@@ -493,13 +718,13 @@ describe("issue.edit", () => {
       type: "plan",
       method: "PUT",
       url: `${API}/rest/api/3/issue/ABC-123`,
-      next: [["atl", "issue", "edit", "ABC-123", "--summary", "New title"]],
+      next: [["atl", "issue", "update", "ABC-123", "--summary", "New title"]],
     });
   });
 
   test("with nothing to change it fails before any request", async () => {
     serve({});
-    const error = await failure(run("issue.edit", { issue: "ABC-123" }, {}));
+    const error = await failure(run("issue.update", { issue: "ABC-123" }, {}));
     expect(error.code).toBe("nothing_to_edit");
     expect(sent).toEqual([]);
   });
@@ -508,7 +733,7 @@ describe("issue.edit", () => {
     serve({
       "PUT /rest/api/3/issue/ABC-123": { status: 409, body: { errorMessages: ["conflict"] } },
     });
-    const error = await failure(run("issue.edit", { issue: "ABC-123" }, { summary: "X" }));
+    const error = await failure(run("issue.update", { issue: "ABC-123" }, { summary: "X" }));
     expect(error.exitCode).toBe(3);
     expect(error.hint).toContain("re-read");
     expect(error.next).toEqual([["atl", "issue", "get", "ABC-123"]]);
@@ -829,7 +1054,7 @@ describe("issue.log", () => {
       path: "/rest/api/3/issue/ABC-123/worklog",
     });
     expect(writes()[0]?.body).toEqual({
-      timeSpent: "2h 30m",
+      timeSpentSeconds: 9000,
       started: "2026-03-09T09:00:00.000+0000",
       comment: markdownToAdf("Pairing"),
     });
@@ -885,10 +1110,74 @@ describe("issue.log", () => {
     },
   );
 
-  test.each(["1d", "1.5h", "2h 30m", "1w 2d 3h 4m"])("duration %p is accepted", async (good) => {
-    serve({ "POST /rest/api/3/issue/ABC-123/worklog": created(WORKLOG) });
-    await run("issue.log", { issue: "ABC-123" }, {}, { rest: good.split(" ") });
-    expect(bodyField(0, "timeSpent")).toBe(good);
+  test.each([
+    ["1.5h", 5400],
+    ["1,5h", 5400],
+    ["0,25h", 900],
+    ["2.25h", 8100],
+    ["2h 30m", 9000],
+    ["90s", 90],
+    ["1h 30m 30s", 5430],
+  ])(
+    "duration %p is sent as %p seconds without reading the site configuration",
+    async (text, seconds) => {
+      serve({ "POST /rest/api/3/issue/ABC-123/worklog": created(WORKLOG) });
+      await run("issue.log", { issue: "ABC-123" }, {}, { rest: text.split(" ") });
+      expect(writes()[0]?.body).toEqual({ timeSpentSeconds: seconds });
+      expect(sent.map((s) => s.path)).toEqual(["/rest/api/3/issue/ABC-123/worklog"]);
+    },
+  );
+
+  describe("days and weeks", () => {
+    const config = (workingHoursPerDay: number, workingDaysPerWeek: number) =>
+      ok({ timeTrackingConfiguration: { workingHoursPerDay, workingDaysPerWeek } });
+
+    test.each([
+      ["1d", 27000],
+      ["0,5d", 13500],
+      ["0.5d", 13500],
+      ["1w", 108000],
+      ["1w 2d 3h 4m", 173040],
+    ])("duration %p is %p seconds at 7.5 hours a day, 4 days a week", async (text, seconds) => {
+      serve({
+        "GET /rest/api/3/configuration": config(7.5, 4),
+        "POST /rest/api/3/issue/ABC-123/worklog": created(WORKLOG),
+      });
+      await run("issue.log", { issue: "ABC-123" }, {}, { rest: text.split(" ") });
+      expect(writes()[0]?.body).toEqual({ timeSpentSeconds: seconds });
+      expect(sent.filter((s) => s.path === "/rest/api/3/configuration")).toHaveLength(1);
+    });
+
+    test("--edit sends the converted seconds too", async () => {
+      serve({
+        "GET /rest/api/3/configuration": config(8, 5),
+        "PUT /rest/api/3/issue/ABC-123/worklog/10200": ok(WORKLOG),
+      });
+      await run("issue.log", { issue: "ABC-123" }, { edit: "10200" }, { rest: ["1d"] });
+      expect(writes()[0]?.body).toEqual({ timeSpentSeconds: 28800 });
+    });
+
+    test.each([
+      ["a forbidden configuration", { "GET /rest/api/3/configuration": { status: 403, body: {} } }],
+      ["a configuration without working time", { "GET /rest/api/3/configuration": ok({}) }],
+    ])("%s is working_time_unavailable and nothing is logged", async (_name, routes) => {
+      serve(routes);
+      const error = await failure(run("issue.log", { issue: "ABC-123" }, {}, { rest: ["0,5d"] }));
+      expect(error.code).toBe("working_time_unavailable");
+      expect(error.category).toBe("input");
+      expect(writes()).toEqual([]);
+    });
+  });
+
+  test("the worklog output keeps the human duration the site reports", async () => {
+    serve({
+      "POST /rest/api/3/issue/ABC-123/worklog": created({
+        ...WORKLOG,
+        timeSpent: "1 óra, 30 perc",
+      }),
+    });
+    const result = await run("issue.log", { issue: "ABC-123" }, {}, { rest: ["1,5h"] });
+    expect(result).toMatchObject({ timeSpent: "1 óra, 30 perc" });
   });
 
   test("an unparseable --started is an input error", async () => {
@@ -1140,7 +1429,7 @@ describe("inline and stdin bodies", () => {
     });
   });
 
-  test("issue.create and issue.edit accept --body as the description", async () => {
+  test("issue.create and issue.update accept --body as the description", async () => {
     serve({
       [TYPES_ROUTE]: TYPES,
       "POST /rest/api/3/issue": created({ id: "1", key: "ABC-9" }),
@@ -1148,7 +1437,7 @@ describe("inline and stdin bodies", () => {
       "GET /rest/api/3/issue/ABC-123": ok({ id: "1", key: "ABC-123", fields: {} }),
     });
     await run("issue.create", {}, { project: "ABC", type: "Task", summary: "S", body: "Details" });
-    await run("issue.edit", { issue: "ABC-123" }, { body: "New details" });
+    await run("issue.update", { issue: "ABC-123" }, { body: "New details" });
     expect(bodyField(0, "fields")).toMatchObject({ description: markdownToAdf("Details") });
     expect(bodyField(1, "fields")).toEqual({ description: markdownToAdf("New details") });
   });
@@ -1173,7 +1462,7 @@ describe("inline and stdin bodies", () => {
     const bodies = writes().map((w) => w.body);
     expect(bodies[0]).toEqual({ transition: { id: "21" } });
     expect(bodies[1]).toEqual({ body: markdownToAdf("Shipped") });
-    expect(bodies[2]).toMatchObject({ timeSpent: "1h", comment: markdownToAdf("Pairing") });
+    expect(bodies[2]).toMatchObject({ timeSpentSeconds: 3600, comment: markdownToAdf("Pairing") });
     expect(bodies[3]).toMatchObject({ comment: { body: markdownToAdf("Same root cause") } });
   });
 

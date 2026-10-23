@@ -237,6 +237,8 @@ describe("McpClient errors", () => {
     const flaky = new McpClient({
       env: ENV,
       fetch: () => Promise.resolve(new Response("x", { status: 503 })),
+      sleep: () => Promise.resolve(),
+      stderr: () => {},
     });
     expect(await rejection(flaky.initialize())).toMatchObject({
       code: "http_503",
@@ -261,10 +263,135 @@ describe("McpClient errors", () => {
     const mcp = new McpClient({
       env: ENV,
       fetch: () => Promise.reject(new TypeError("connection refused")),
+      sleep: () => Promise.resolve(),
+      stderr: () => {},
     });
     expect(await rejection(mcp.initialize())).toMatchObject({
       code: "network_error",
       category: "transient",
     });
+  });
+});
+
+/** Fake server whose first `failures.length` requests for `method` get `failures` instead. */
+function throttled(method: string, failures: readonly Response[], options: FakeMcpOptions = {}) {
+  const server = fakeMcp(options);
+  const pending = [...failures];
+  const sleeps: number[] = [];
+  const stderr: string[] = [];
+  let attempts = 0;
+  const mcp = new McpClient({
+    env: ENV,
+    fetch: (url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      const matches = body.includes(`"method":"${method}"`);
+      if (matches) {
+        attempts++;
+      }
+      const next = matches ? pending.shift() : undefined;
+      return next === undefined ? server.fetch(url, init) : Promise.resolve(next);
+    },
+    sleep: (ms) => {
+      sleeps.push(ms);
+      return Promise.resolve();
+    },
+    stderr: (line) => stderr.push(line),
+  });
+  return { server, mcp, sleeps, stderr, attempts: () => attempts };
+}
+
+const rateLimited = (retryAfter: string) =>
+  new Response(JSON.stringify({ message: "slow down" }), {
+    status: 429,
+    headers: { "Retry-After": retryAfter },
+  });
+describe("McpClient retry", () => {
+  const tool = { name: "search", inputSchema: { type: "object" } };
+  const RETRY_PATH = new URL(MCP_ENDPOINT).pathname;
+
+  test("initialize retries a 429 after the Retry-After delay and emits one diagnostic", async () => {
+    const { mcp, sleeps, stderr } = throttled("initialize", [rateLimited("2")]);
+    const init = await mcp.initialize();
+    expect(init.protocolVersion).toBe("2025-06-18");
+    expect(sleeps).toEqual([2000]);
+    expect(stderr.map((line) => JSON.parse(line))).toEqual([
+      { type: "retry", status: 429, attempt: 1, waitMs: 2000, path: RETRY_PATH },
+    ]);
+    expect(stderr.join("")).not.toContain("test-token");
+  });
+
+  test("tools/list retries a 503 and honors an HTTP-date Retry-After", async () => {
+    const date = new Date(Date.now() + 5000).toUTCString();
+    const { mcp, sleeps } = throttled(
+      "tools/list",
+      [new Response("x", { status: 503, headers: { "Retry-After": date } })],
+      { tools: [tool] },
+    );
+    await mcp.initialize();
+    expect((await mcp.listTools()).map((t) => t.name)).toEqual(["search"]);
+    expect(sleeps).toHaveLength(1);
+    expect(sleeps[0]).toBeGreaterThan(3000);
+    expect(sleeps[0]).toBeLessThanOrEqual(5000);
+  }, 10_000);
+
+  test("a read-only tools/call is retried on 429", async () => {
+    const { server, mcp, sleeps } = throttled("tools/call", [rateLimited("1")], {
+      tools: [tool],
+      toolResults: { search: textResult({ ok: true }) },
+    });
+    await mcp.initialize();
+    expect(await mcp.callTool("search", { query: "x" }, { readOnly: true })).toEqual({
+      content: [{ ok: true }],
+    });
+    expect(sleeps).toEqual([1000]);
+    expect(server.toolCalls()).toHaveLength(1);
+  });
+
+  test("a tools/call that may write is sent once and its 429 surfaces", async () => {
+    const { mcp, sleeps, stderr, attempts } = throttled("tools/call", [rateLimited("1")], {
+      toolResults: { createJiraIssue: textResult({ ok: true }) },
+    });
+    await mcp.initialize();
+    const error = await rejection(mcp.callTool("createJiraIssue", { summary: "x" }));
+    expect(error).toMatchObject({ code: "http_429", category: "transient", exitCode: 3 });
+    expect(sleeps).toEqual([]);
+    expect(stderr).toEqual([]);
+    expect(attempts()).toBe(1);
+  });
+
+  test("stops after three attempts", async () => {
+    const { mcp, sleeps, stderr, attempts } = throttled("tools/list", [
+      rateLimited("1"),
+      rateLimited("1"),
+      rateLimited("1"),
+      rateLimited("1"),
+    ]);
+    await mcp.initialize();
+    const error = await rejection(mcp.listTools());
+    expect(error).toMatchObject({ code: "http_429", category: "transient", status: 429 });
+    expect(sleeps).toEqual([1000, 1000]);
+    expect(stderr).toHaveLength(2);
+    expect(attempts()).toBe(3);
+  });
+
+  test("a Retry-After beyond the retry budget fails fast with a when-to-retry hint", async () => {
+    const { mcp, sleeps, stderr, attempts } = throttled("tools/list", [
+      rateLimited("300"),
+      rateLimited("1"),
+    ]);
+    await mcp.initialize();
+    const error = await rejection(mcp.listTools());
+    expect(error).toMatchObject({ code: "http_429", category: "transient" });
+    expect(error.hint).toContain("300 s");
+    expect(sleeps).toEqual([]);
+    expect(stderr).toEqual([]);
+    expect(attempts()).toBe(1);
+  });
+
+  test("non-retryable statuses are not retried", async () => {
+    const { mcp, sleeps } = throttled("tools/list", [new Response("{}", { status: 404 })]);
+    await mcp.initialize();
+    expect(await rejection(mcp.listTools())).toMatchObject({ code: "http_404" });
+    expect(sleeps).toEqual([]);
   });
 });

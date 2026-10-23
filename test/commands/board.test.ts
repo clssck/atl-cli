@@ -174,6 +174,21 @@ describe("board.list", () => {
   });
 });
 
+function graphqlCalls(name: string): typeof calls {
+  return calls.filter((c) => isRecord(c.body) && c.body.operationName === name);
+}
+
+/** `jiraProjectByKey` answer listing the project's boards. */
+function projectBoards(nodes: unknown[]): unknown {
+  return {
+    data: {
+      jira: {
+        jiraProjectByKey: { key: "KAN", boards: { edges: nodes.map((node) => ({ node })) } },
+      },
+    },
+  };
+}
+
 describe("board.get", () => {
   test("queries the board ARI and drops default booleans", async () => {
     gql.BoardGet = BOARD;
@@ -209,10 +224,64 @@ describe("board.get", () => {
     expect(error).toMatchObject({ code: "not_found", next: [["atl", "board", "list"]] });
   });
 
-  test("a non-numeric board is an input error before any request", async () => {
-    const error = await run("board.get", { board: "kanban" }).catch((e: unknown) => e);
-    expect(error).toMatchObject({ code: "invalid_board" });
+  test("a value that is neither an id, a URL nor a project key is an input error before any request", async () => {
+    const error = await run("board.get", { board: "not a board!" }).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "invalid_board",
+      hint: expect.stringContaining("project key"),
+    });
     expect(calls).toHaveLength(0);
+  });
+
+  describe("by project key", () => {
+    test("a key, a lowercase key and a browse URL resolve the project's only board", async () => {
+      gql.ProjectBoards = projectBoards([{ boardId: 1, name: "KAN board", boardType: "KANBAN" }]);
+      gql.BoardGet = BOARD;
+      for (const board of ["KAN", "kan", "https://acme.atlassian.net/browse/KAN-7"]) {
+        await run("board.get", { board });
+      }
+      expect(graphqlCalls("ProjectBoards").map((c) => c.body)).toEqual(
+        Array.from({ length: 3 }, () =>
+          expect.objectContaining({ variables: { key: "KAN", cloudId: CLOUD } }),
+        ),
+      );
+      expect(graphqlCalls("BoardGet").map((c) => c.body)).toEqual(
+        Array.from({ length: 3 }, () => expect.objectContaining({ variables: { id: BOARD_ARI } })),
+      );
+    });
+
+    test("a board id or board URL never looks the project up", async () => {
+      gql.BoardGet = BOARD;
+      await run("board.get", { board: "1" });
+      await run("board.get", {
+        board: "https://acme.atlassian.net/jira/software/projects/KAN/boards/1",
+      });
+      expect(graphqlCalls("ProjectBoards")).toHaveLength(0);
+    });
+
+    test("several boards are ambiguous and list id, name and type", async () => {
+      gql.ProjectBoards = projectBoards([
+        { boardId: 1, name: "KAN board", boardType: "KANBAN" },
+        { boardId: 9, name: "KAN sprints", boardType: "SCRUM" },
+      ]);
+      const error = await run("board.get", { board: "KAN" }).catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: "ambiguous_board",
+        hint: expect.stringContaining('9 "KAN sprints" (SCRUM)'),
+      });
+    });
+
+    test("a project without boards or an unknown project is board_not_found", async () => {
+      gql.ProjectBoards = projectBoards([]);
+      const none = await run("board.get", { board: "KAN" }).catch((e: unknown) => e);
+      expect(none).toMatchObject({ code: "board_not_found", message: "Project KAN has no board" });
+      gql.ProjectBoards = {
+        errors: [{ message: "no such key", extensions: { statusCode: 404 } }],
+        data: null,
+      };
+      const unknown = await run("board.get", { board: "ZZZ" }).catch((e: unknown) => e);
+      expect(unknown).toMatchObject({ code: "board_not_found", message: "Project ZZZ not found" });
+    });
   });
 });
 
@@ -298,7 +367,106 @@ describe("board.issues", () => {
     });
     expect(result).toEqual({ count: 182 });
   });
+
+  test("--sprint maps an id, a state and a name onto the sprint JQL clause", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/search/jql"] = ISSUES;
+    for (const sprint of ["4", "active", "Closed", 'Sprint "Q1"']) {
+      await run("board.issues", { board: "1" }, { sprint });
+    }
+    expect(
+      calls.filter((c) => c.path === "/rest/api/3/search/jql").map((c) => c.query.get("jql")),
+    ).toEqual([
+      '(project = "KAN") AND sprint = 4 ORDER BY Rank ASC',
+      '(project = "KAN") AND sprint in openSprints() ORDER BY Rank ASC',
+      '(project = "KAN") AND sprint in closedSprints() ORDER BY Rank ASC',
+      '(project = "KAN") AND sprint = "Sprint \\"Q1\\"" ORDER BY Rank ASC',
+    ]);
+  });
+
+  test("--sprint contradicts the backlog dataset and is refused before any search", async () => {
+    gql.BoardGet = BOARD;
+    const error = await run(
+      "board.issues",
+      { board: "1" },
+      { sprint: "4", dataset: "backlog" },
+    ).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "invalid_flags" });
+    expect(calls.some((c) => c.path === "/rest/api/3/search/jql")).toBe(false);
+  });
+
+  describe("a company-managed scrum board", () => {
+    const SCRUM = {
+      data: {
+        jira: {
+          jiraBoard: {
+            ...BOARD.data.jira.jiraBoard,
+            boardId: 2,
+            boardType: "SCRUM",
+            boardUrl: "https://acme.atlassian.net/jira/software/c/projects/NMS/boards/2",
+          },
+        },
+      },
+    };
+
+    test("leaves epics out of the board's issues", async () => {
+      gql.BoardGet = SCRUM;
+      rest["GET /rest/api/3/search/jql"] = ISSUES;
+      await run("board.issues", { board: "2" });
+      expect(
+        calls.filter((c) => c.path === "/rest/api/3/search/jql").map((c) => c.query.get("jql")),
+      ).toEqual(['(project = "NMS") AND hierarchyLevel != 1 ORDER BY Rank ASC']);
+    });
+
+    test("the backlog is unfinished work outside open and future sprints, without epics", async () => {
+      gql.BoardGet = SCRUM;
+      rest["POST /rest/api/3/search/approximate-count"] = { count: 15 };
+      await run("board.issues", { board: "2" }, { dataset: "backlog", count: true });
+      expect(
+        calls.find((c) => c.method === "POST" && c.path.endsWith("approximate-count"))?.body,
+      ).toEqual({
+        jql: '(project = "NMS") AND hierarchyLevel != 1 AND (sprint is EMPTY OR sprint not in (openSprints(), futureSprints())) AND statusCategory != Done',
+      });
+    });
+  });
+
+  test("a team-managed scrum board keeps its epics but its backlog still omits them", async () => {
+    gql.BoardGet = {
+      data: {
+        jira: { jiraBoard: { ...BOARD.data.jira.jiraBoard, boardType: "SCRUM" } },
+      },
+    };
+    rest["GET /rest/api/3/search/jql"] = ISSUES;
+    await run("board.issues", { board: "1" });
+    await run("board.issues", { board: "1" }, { dataset: "backlog" });
+    expect(
+      calls.filter((c) => c.path === "/rest/api/3/search/jql").map((c) => c.query.get("jql")),
+    ).toEqual([
+      '(project = "KAN") ORDER BY Rank ASC',
+      '(project = "KAN") AND hierarchyLevel != 1 AND (sprint is EMPTY OR sprint not in (openSprints(), futureSprints())) AND statusCategory != Done ORDER BY Rank ASC',
+    ]);
+  });
 });
+
+/** A sprint-field issue as the search returns it; customfield_10042 is a look-alike points field. */
+function sprintIssue(
+  key: string,
+  category: string,
+  points: number | undefined,
+  sprints: unknown[],
+  subtask = false,
+): { key: string; fields: Record<string, unknown> } {
+  return {
+    key,
+    fields: {
+      customfield_10020: sprints,
+      status: { name: "localized", statusCategory: { key: category } },
+      issuetype: { subtask },
+      customfield_10016: points,
+      customfield_10042: 99,
+    },
+  };
+}
 
 describe("board.sprints", () => {
   const FIELDS = [
@@ -359,5 +527,74 @@ describe("board.sprints", () => {
     rest["GET /rest/api/3/field"] = [{ id: "summary" }];
     expect(await run("board.sprints", { board: "1" })).toEqual({ items: [] });
     expect(calls.some((c) => c.path === "/rest/api/3/search/jql")).toBe(false);
+  });
+
+  test("--summary totals points by status category, reports carry-over and velocity", async () => {
+    gql.BoardGet = BOARD;
+    rest["GET /rest/api/3/field"] = [
+      ...FIELDS,
+      {
+        id: "customfield_10042",
+        name: "Story Points",
+        schema: { custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" },
+      },
+      {
+        id: "customfield_10016",
+        name: "Story point estimate",
+        schema: { custom: "com.pyxis.greenhopper.jira:jsw-story-points" },
+      },
+    ];
+    const s1 = { id: 7, name: "S1", state: "closed" };
+    const s2 = { id: 8, name: "S2", state: "closed" };
+    const s3 = { id: 9, name: "S3", state: "active" };
+    rest["GET /rest/api/3/search/jql"] = {
+      issues: [
+        sprintIssue("KAN-1", "done", 5, [s1]),
+        sprintIssue("KAN-2", "indeterminate", 8, [s1, s2, s3]),
+        sprintIssue("KAN-3", "done", 3, [s2, s3]),
+        sprintIssue("KAN-4", "new", undefined, [s3]),
+        sprintIssue("KAN-5", "indeterminate", undefined, [s3], true),
+      ],
+      isLast: true,
+    };
+    const result = await run("board.sprints", { board: "1" }, { summary: true });
+    expect(calls.find((c) => c.path === "/rest/api/3/search/jql")?.query.get("fields")).toBe(
+      "customfield_10020,status,issuetype,customfield_10016",
+    );
+    expect(result).toEqual({
+      items: [
+        {
+          id: 7,
+          name: "S1",
+          state: "closed",
+          issueCount: 2,
+          byStatus: { todo: 0, inProgress: 1, done: 1 },
+          points: { todo: 0, inProgress: 8, done: 5, remaining: 8, total: 13 },
+          velocity: 5,
+          carriedOut: ["KAN-2"],
+        },
+        {
+          id: 8,
+          name: "S2",
+          state: "closed",
+          issueCount: 2,
+          byStatus: { todo: 0, inProgress: 1, done: 1 },
+          points: { todo: 0, inProgress: 8, done: 3, remaining: 8, total: 11 },
+          velocity: 0,
+          carriedIn: ["KAN-2"],
+          carriedOut: ["KAN-2", "KAN-3"],
+        },
+        {
+          id: 9,
+          name: "S3",
+          state: "active",
+          issueCount: 4,
+          byStatus: { todo: 1, inProgress: 2, done: 1 },
+          points: { todo: 0, inProgress: 8, done: 3, remaining: 8, total: 11 },
+          unestimated: ["KAN-4"],
+          carriedIn: ["KAN-2", "KAN-3"],
+        },
+      ],
+    });
   });
 });

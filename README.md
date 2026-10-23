@@ -52,7 +52,7 @@ auth login | status | refresh | logout
 
 issue get | transitions | links [--chain "<relation>" [--max N]] | tree [--depth N] [--group-by <field>] | link-types | comments | changelog | worklogs | editmeta | watchers | permissions
 issue attachments | attachment add | attachment download [--force] | attachment delete
-issue create | edit | comment | move | log | link | remote-link add | convert | watch | unwatch | notify
+issue create | update | comment | move | log | link | remote-link add | convert | watch | unwatch | notify
 issue delete | comment-delete | remote-link delete   (need --yes)
 jql "<query>|<issues URL>" [--group-by <field>] | jql-check <query...> | jql-suggest
 bulk edit | transition | move | delete | status   (async bulk tasks; delete needs --yes)
@@ -115,7 +115,7 @@ Identifiers: page ids, page/blog URLs, tiny links (`/wiki/x/...`), `/display/SPA
 
 Exit codes: `0` ok, `1` input/config/auth (including `body_not_utf8` for a non-UTF-8 `--file`/stdin body), `2` API/internal (every not-found: `page_not_found`, `space_not_found`, `attachment_not_found`, `comment_not_found`, `property_not_found`), `3` transient (429/5xx/timeout/409; after a write error `write_outcome_unknown` read back before retrying), `4` failed assertion.
 
-Markdown syntax: `<u>`, `<sub>` and `<sup>` read and write underline, subscript and superscript. A table or task list inside a quote, and a table inside a list item, is placed after its container. Tabs in fenced code are kept; merged table cells repeat their text on read; a mid-paragraph image is inline and a linked image keeps its link. `atl formats` prints the full mapping.
+Markdown syntax: `<u>`, `<sub>` and `<sup>` read and write underline, subscript and superscript; `<strong>`, `<em>` and `<del>` read as bold, italic and strike and are written only where `**`, `*` or `~~` would not re-parse (a mark touching a word or punctuation). A table or task list inside a quote, and a table inside a list item, is placed after its container. Tabs in fenced code are kept; merged table cells repeat their text on read; a mid-paragraph image is inline and a linked image keeps its link. `atl formats` prints the full mapping.
 
 ## Environment
 

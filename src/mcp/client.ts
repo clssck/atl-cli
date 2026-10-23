@@ -1,7 +1,15 @@
 import { getAccessToken } from "../auth/index.ts";
 import { AtlError } from "../core/errors.ts";
 import { isRecord } from "../core/guards.ts";
-import { extractErrorMessage, mapHttpError, resolveTimeout, type FetchLike } from "../core/http.ts";
+import {
+  extractErrorMessage,
+  mapHttpError,
+  resolveTimeout,
+  sendWithRetry,
+  type FetchLike,
+  type HttpMethod,
+} from "../core/http.ts";
+import { type Writer, writeStderr } from "../core/output.ts";
 import { USER_AGENT, VERSION } from "../version.ts";
 
 export const MCP_ENDPOINT = "https://mcp.atlassian.com/v1/mcp/authv2";
@@ -15,6 +23,10 @@ export interface McpClientOptions {
   /** Defaults to `ATL_MCP_URL`, then the Atlassian MCP v1 endpoint. */
   endpoint?: string;
   timeoutMs?: number;
+  /** Backoff sleep between retries; defaults to `Bun.sleep`. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Receives one JSONL `retry` diagnostic per retry; defaults to stderr. */
+  stderr?: Writer;
 }
 
 export interface McpTool {
@@ -201,12 +213,32 @@ function toolError(name: string, content: readonly unknown[]): AtlError {
   });
 }
 
+function networkError(label: string, timeoutMs: number, error: unknown): AtlError {
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return new AtlError(`MCP ${label} timed out after ${timeoutMs} ms`, {
+      code: "timeout",
+      category: "transient",
+      hint: "Raise ATL_TIMEOUT_MS or retry.",
+      cause: error,
+    });
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  return new AtlError(`MCP ${label} failed: ${detail}`, {
+    code: "network_error",
+    category: "transient",
+    hint: "Network failure; check connectivity and retry.",
+    cause: error,
+  });
+}
+
 export class McpClient {
   readonly endpoint: string;
   readonly #env: NodeJS.ProcessEnv;
   readonly #fetch: FetchLike;
   readonly #injectedFetch: FetchLike | undefined;
   readonly #timeoutMs: number;
+  readonly #sleep: (ms: number) => Promise<void>;
+  readonly #stderr: Writer;
   #sessionId: string | undefined;
   #initialized = false;
   #nextId = 1;
@@ -219,6 +251,8 @@ export class McpClient {
     this.#injectedFetch = options.fetch;
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#timeoutMs = resolveTimeout(options.timeoutMs);
+    this.#sleep = options.sleep ?? ((ms) => Bun.sleep(ms));
+    this.#stderr = options.stderr ?? writeStderr;
   }
 
   async #headers(): Promise<Record<string, string>> {
@@ -236,40 +270,42 @@ export class McpClient {
     };
   }
 
-  async #send(method: string, init: RequestInit, label: string): Promise<Response> {
-    try {
-      return await this.#fetch(this.endpoint, {
-        ...init,
-        method,
-        signal: AbortSignal.timeout(this.#timeoutMs),
-      });
-    } catch (error) {
-      if (error instanceof AtlError) {
-        throw error;
-      }
-      if (
-        error instanceof Error &&
-        (error.name === "TimeoutError" || error.name === "AbortError")
-      ) {
-        throw new AtlError(`MCP ${label} timed out after ${this.#timeoutMs} ms`, {
-          code: "timeout",
-          category: "transient",
-          hint: "Raise ATL_TIMEOUT_MS or retry.",
-          cause: error,
-        });
-      }
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new AtlError(`MCP ${label} failed: ${detail}`, {
-        code: "network_error",
-        category: "transient",
-        hint: "Network failure; check connectivity and retry.",
-        cause: error,
-      });
-    }
+  /**
+   * Send one request under the shared retry policy (429/502/503/504 honoring Retry-After, and
+   * network errors; 3 attempts, bounded sleep) when `idempotent`, exactly once otherwise.
+   * Non-2xx responses throw the mapped error.
+   */
+  async #send(
+    method: HttpMethod,
+    init: RequestInit,
+    label: string,
+    idempotent: boolean,
+  ): Promise<Response> {
+    return sendWithRetry({
+      method,
+      url: this.endpoint,
+      idempotent,
+      send: () =>
+        this.#fetch(this.endpoint, {
+          ...init,
+          method,
+          signal: AbortSignal.timeout(this.#timeoutMs),
+        }),
+      sleep: this.#sleep,
+      stderr: this.#stderr,
+      networkError: (error) => networkError(label, this.#timeoutMs, error),
+    });
   }
 
-  /** One JSON-RPC request; returns `result` or throws the mapped JSON-RPC error. */
-  async #request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  /**
+   * One JSON-RPC request; returns `result` or throws the mapped JSON-RPC error. `idempotent`
+   * requests (initialize, tools/list, read tools) are retried on 429/503; others never are.
+   */
+  async #request(
+    method: string,
+    params: Record<string, unknown>,
+    idempotent: boolean,
+  ): Promise<unknown> {
     const id = this.#nextId++;
     const response = await this.#send(
       "POST",
@@ -278,11 +314,9 @@ export class McpClient {
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
       },
       method,
+      idempotent,
     );
     const text = await response.text().catch(() => "");
-    if (!response.ok) {
-      throw mapHttpError("POST", this.endpoint, response.status, text);
-    }
     const sessionId = response.headers.get("mcp-session-id");
     if (sessionId !== null && sessionId !== "") {
       this.#sessionId = sessionId;
@@ -327,19 +361,21 @@ export class McpClient {
       "POST",
       { headers: await this.#headers(), body: JSON.stringify({ jsonrpc: "2.0", method }) },
       method,
+      true,
     );
-    const text = await response.text().catch(() => "");
-    if (!response.ok) {
-      throw mapHttpError("POST", this.endpoint, response.status, text);
-    }
+    await response.body?.cancel();
   }
 
   async initialize(): Promise<McpInitializeResult> {
-    const result = await this.#request("initialize", {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: "atl", version: VERSION },
-    });
+    const result = await this.#request(
+      "initialize",
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "atl", version: VERSION },
+      },
+      true,
+    );
     if (!isRecord(result) || typeof result.protocolVersion !== "string") {
       throw protocolError("MCP initialize returned an unexpected result");
     }
@@ -357,7 +393,11 @@ export class McpClient {
     const tools: McpTool[] = [];
     let cursor: string | undefined;
     do {
-      const result = await this.#request("tools/list", cursor === undefined ? {} : { cursor });
+      const result = await this.#request(
+        "tools/list",
+        cursor === undefined ? {} : { cursor },
+        true,
+      );
       if (!isRecord(result) || !Array.isArray(result.tools)) {
         throw protocolError("MCP tools/list returned an unexpected result");
       }
@@ -374,8 +414,20 @@ export class McpClient {
     return tools;
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    const result = await this.#request("tools/call", { name, arguments: args });
+  /**
+   * Call a tool. Only `readOnly` calls (the tool's `readOnlyHint`, or a lookup such as `discover`)
+   * are retried on 429/503; a call that may write is sent exactly once.
+   */
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    options: { readOnly?: boolean } = {},
+  ): Promise<McpToolResult> {
+    const result = await this.#request(
+      "tools/call",
+      { name, arguments: args },
+      options.readOnly === true,
+    );
     if (!isRecord(result)) {
       throw protocolError(`MCP tool ${name} returned an unexpected result`);
     }
@@ -397,7 +449,12 @@ export class McpClient {
       return;
     }
     try {
-      const response = await this.#send("DELETE", { headers: await this.#headers() }, "close");
+      const response = await this.#send(
+        "DELETE",
+        { headers: await this.#headers() },
+        "close",
+        false,
+      );
       await response.body?.cancel();
     } catch {
       // Best effort: the server expires idle sessions on its own.

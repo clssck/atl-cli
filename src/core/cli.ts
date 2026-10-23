@@ -710,6 +710,35 @@ export function renderCommandHelp(spec: CommandSpec): string {
 // Invocation parsing
 // ---------------------------------------------------------------------------
 
+/**
+ * Verbs agents reach for that the registry spells differently. Edit distance alone maps
+ * `issue update` to `issue create`, the opposite intent; a synonym wins over any near spelling.
+ */
+const VERB_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
+  edit: ["update"],
+  update: ["edit"],
+  modify: ["edit"],
+  change: ["edit"],
+  transition: ["move"],
+  status: ["move"],
+  remove: ["delete"],
+  rm: ["delete"],
+  del: ["delete"],
+  show: ["get"],
+  view: ["get"],
+  read: ["get"],
+  ls: ["list"],
+  new: ["create"],
+  add: ["create"],
+  find: ["search", "list"],
+};
+
+/** Registry verbs for a typed verb; own keys only, so `toString` is no synonym. */
+function synonymsOf(verb: string | undefined): readonly string[] | undefined {
+  const key = verb?.toLowerCase() ?? "";
+  return Object.hasOwn(VERB_SYNONYMS, key) ? VERB_SYNONYMS[key] : undefined;
+}
+
 function unknownCommand(
   reg: CommandRegistry,
   words: readonly string[],
@@ -724,8 +753,26 @@ function unknownCommand(
   }
   const names = reg.all().map((spec) => commandWords(spec.name).join(" "));
 
-  let suggestion: string | undefined;
-  let bestDistance = Number.POSITIVE_INFINITY;
+  // The verb is the word after the longest typed group prefix (`page` in `page remove`,
+  // `page property` in `page property remove`); words after it are arguments.
+  let groupLength = 0;
+  while (
+    groupLength < typedWords.length &&
+    reg.isGroupPrefix(typedWords.slice(0, groupLength + 1).map((word) => word.toLowerCase()))
+  ) {
+    groupLength++;
+  }
+  const synonyms = groupLength === 0 ? undefined : synonymsOf(typedWords[groupLength]);
+  const typedGroup = typedWords
+    .slice(0, groupLength)
+    .map((word) => word.toLowerCase())
+    .join(" ");
+  let suggestion = synonyms
+    ?.map((replacement) => `${typedGroup} ${replacement}`)
+    .find((candidate) => names.includes(candidate));
+  // A recognised verb whose command does not exist (`page remove`) must not fall through to a
+  // near spelling with another intent (`page move`): list the group's commands instead.
+  let bestDistance = synonyms === undefined ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
   for (const name of names) {
     const typed = typedWords.slice(0, name.split(" ").length).join(" ").toLowerCase();
     const distance = editDistance(typed, name.toLowerCase());
@@ -937,7 +984,7 @@ export async function runCli(argv: readonly string[], io: Partial<CliIo> = {}): 
                 type: "warning",
                 code: "fields_unmatched",
                 paths,
-                hint: "No result field matched these --fields paths; list items are addressed per item (key, not items.key). Rerun without --fields to see the shape.",
+                hint: "No result field matched these --fields paths (list items are addressed per item: key and items.key both work). Rerun without --fields to see the shape.",
               },
               err,
             ),

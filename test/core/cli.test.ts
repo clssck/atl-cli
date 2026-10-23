@@ -324,6 +324,20 @@ describe("parseArgv positionals and commands", () => {
     expect(error.hint).toContain("get, make");
   });
 
+  test("an intent verb maps to the registry's verb, never to a near spelling with another intent", () => {
+    expect(parseError(["thing", "show", "1"]).hint).toBe('Did you mean "atl thing get"?');
+    // `new` means create; `thing get` is one edit closer than any create but must not be offered.
+    const error = parseError(["thing", "new"]);
+    expect(error.hint).not.toContain("Did you mean");
+    expect(error.hint).toContain("get, make");
+  });
+
+  test("prototype names are not verbs and argument words do not block a suggestion", () => {
+    expect(parseError(["thing", "toString"]).code).toBe("unknown_command");
+    // `status` is an intent verb, but here it is an argument after a misspelt command.
+    expect(parseError(["thng", "get", "status"]).hint).toBe('Did you mean "atl thing get"?');
+  });
+
   test("single-word command and group-only invocation", () => {
     expect(parseRun(["echo"]).command.name).toBe("echo");
     const group = parseArgv(["thing"], makeRegistry(), {});

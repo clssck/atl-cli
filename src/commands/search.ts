@@ -14,7 +14,13 @@ import {
 import { openSession, type Session } from "../core/session.ts";
 import { writeDiagnostic } from "../core/output.ts";
 import { queryLiteral, shortTs } from "./common.ts";
-import { searchHitSpaceKey, searchHitTitle, snippet, webUrl } from "./confluence.ts";
+import {
+  searchHitContainerId,
+  searchHitSpaceKey,
+  searchHitTitle,
+  snippet,
+  webUrl,
+} from "./confluence.ts";
 
 export const searchGroups: Readonly<Record<string, string>> = {
   user: "Find Atlassian users",
@@ -254,13 +260,43 @@ const JIRA_FIELDS = "summary,updated,status,issuetype,project,description";
  * User text must match literally, but Lucene (behind both CQL and JQL `~`) reads upper-case
  * AND / OR / NOT as operators and a leading `-` as exclusion: lower-case the words (a lower-case
  * "and" is an ordinary stop word) and escape the dash. A trailing backslash would escape the
- * phrase's closing quote (HTTP 400 "Escaped end quote"): a space after it is insignificant.
+ * phrase's closing quote (HTTP 400 "Escaped end quote"): a space after it is insignificant. A
+ * balanced pair of quotes stays a phrase; an unpaired one is dropped, since Lucene cannot parse it
+ * (Confluence answers HTTP 500, Jira a JQL error).
  */
 function literalText(query: string): string {
-  return query
+  return dropUnpairedQuote(query)
     .replaceAll(/(?<![\w])(?:AND|OR|NOT)(?![\w])/g, (word) => word.toLowerCase())
     .replaceAll(/(^|\s)-(?=\S)/g, "$1\\-")
     .replace(/\\$/, "\\ ");
+}
+
+/** `query` without its last unescaped `"` when their count is odd. */
+function dropUnpairedQuote(query: string): string {
+  const quotes: number[] = [];
+  for (let i = 0; i < query.length; i++) {
+    if (query[i] === "\\") {
+      i++;
+    } else if (query[i] === '"') {
+      quotes.push(i);
+    }
+  }
+  const last = quotes.at(-1);
+  return quotes.length % 2 === 0 || last === undefined
+    ? query
+    : `${query.slice(0, last)}${query.slice(last + 1)}`;
+}
+
+/** A query of only quotes and blanks has no term to search for. */
+function requireSearchTerms(query: string, example: string): string {
+  if (query.replaceAll(/["\s]/g, "") === "") {
+    throw new AtlError("Query has no search terms", {
+      code: "empty_query",
+      category: "input",
+      hint: `Quote characters alone match nothing; pass words to search for, e.g. ${example}.`,
+    });
+  }
+  return query;
 }
 
 /** The CQL `search` runs for Confluence (`text`), and the `atl cql` equivalent of it. */
@@ -329,6 +365,7 @@ function compactConfluence(session: Session, hit: ConfluenceHit) {
     type,
     title: searchHitTitle(hit),
     spaceKey: searchHitSpaceKey(hit),
+    pageId: searchHitContainerId(hit),
     parent: hit.content?.ancestors?.at(-1)?.title,
     text: snippet(hit.excerpt),
     lastModified: shortTs(hit.lastModified),
@@ -372,7 +409,14 @@ const search = defineCommand({
   name: "search",
   summary: "Search Confluence and Jira content by text",
   mcpTools: ["search"],
-  args: [{ name: "query", description: "Search text", required: true }],
+  args: [
+    {
+      name: "query",
+      description: "Search text (unquoted words are joined)",
+      required: true,
+      variadic: true,
+    },
+  ],
   flags: Type.Object({
     type: Type.Optional(
       Type.Union(
@@ -408,7 +452,8 @@ const search = defineCommand({
     'atl search "login bug" --product jira',
   ],
   async run(ctx, input) {
-    const query = requireQuery(input.args.query, 'atl search "release checklist"');
+    const example = 'atl search "release checklist"';
+    const query = requireSearchTerms(requireQuery(input.rest.join(" "), example), example);
     const { type, product } = input.flags;
     const typeProduct: Product | undefined =
       type === undefined ? undefined : type === "issue" ? "jira" : "confluence";

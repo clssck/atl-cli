@@ -1,7 +1,8 @@
 /**
  * Macro-eval scenarios on the corporate-nightmare dataset (eval/nightmare/seed-*.ts). Prompts are
  * natural-language (no tool or command names; the site host appears once); every expected value is
- * derived from the `facts` of eval/.out/nightmare/{jira,confluence}.json at load time. Checks
+ * derived from the `facts` of eval/.out/nightmare/{jira,confluence}.json (n01-n15) or the verified values of
+ * scrum.json (n16-n21) at load time. Checks
  * normalise formatting (thousand separators, decimal commas, date styles, duration units) and
  * reject the planted decoys: a decoy value stated without the answer next to it and without a
  * hedge ("earlier", "not", "comment 4 says", ...) fails.
@@ -102,6 +103,42 @@ function bodyValues(pattern: RegExp): string[] {
   });
 }
 
+function child(parent: Record<string, unknown>, name: string): Record<string, unknown> {
+  const value = parent[name];
+  if (!isRecord(value)) {
+    throw new Error(`scrum manifest field ${name} is not an object`);
+  }
+  return value;
+}
+
+function asRecords(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    throw new Error("scrum manifest value is not an array");
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error("scrum manifest array entry is not an object");
+    }
+    return entry;
+  });
+}
+
+function numberField(parent: Record<string, unknown>, name: string): number {
+  const value = parent[name];
+  if (typeof value !== "number") {
+    throw new Error(`scrum manifest field ${name} is not a number`);
+  }
+  return value;
+}
+
+function list(parent: Record<string, unknown>, name: string): string[] {
+  const value = parent[name];
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    throw new Error(`scrum manifest field ${name} is not a string list`);
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Text normalisation and matchers
 // ---------------------------------------------------------------------------
@@ -200,6 +237,48 @@ function minutesIn(text: string): number[] {
 
 function minutesMatcher(expected: number): Matcher {
   return (text) => minutesIn(text).some((minutes) => Math.abs(minutes - expected) <= 1);
+}
+
+/** `value` as a number of its own: not part of a longer number, a decimal or a key such as NMS-44. */
+function pointsMatcher(value: number): Matcher {
+  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)`));
+}
+
+const POINTS_LABEL = "points?|estimates?|\\bSPs?\\b|pts";
+const BACKLOG_LABEL = "backlog|issues|items|tickets|stories|work items";
+const NUMBER_WORDS: Record<number, string> = { 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven" };
+
+/** Like nearMatcher, but a number glued to a key ("NMS-44") does not count. */
+function countMatcher(label: string, count: number): Matcher {
+  const number = `(?<![\\d.\\-])${count}(?!\\d)`;
+  return rx(new RegExp(`(?:${label})[^\\n\\d]{0,30}${number}|${number}[^\\n\\d]{0,30}(?:${label})`, "i"));
+}
+
+/** `value` next to "Sprint <n>" in either order within one line, without another "sprint" in between. */
+function sprintMatcher(sprint: string, value: number): Matcher {
+  const label = `sprint\\s*${sprint}(?!\\d)`;
+  const number = `(?<![\\d.\\-])${value}(?!\\d)`;
+  const gap = String.raw`(?:(?!sprint)[^\n]){0,60}?`;
+  return rx(new RegExp(`${label}${gap}${number}|${number}${gap}${label}`, "i"));
+}
+
+/** `value` EUR as "25 EUR", "25 euros" or "€25". */
+function eurMatcher(value: number): Matcher {
+  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)\\s*(?:EUR|euros?|€)|€\\s*${value}(?!\\d)`, "i"));
+}
+
+function daysMatcher(value: number): Matcher {
+  return rx(new RegExp(`(?<![\\d.\\-])${value}(?!\\d|\\.\\d)\\s*-?\\s*(?:(?:calendar\\s+|business\\s+|working\\s+)?days?|nap)(?![\\p{L}])`, "iu"));
+}
+
+/**
+ * `day` stated for `role` and not for `other`: "Corp: Thursday", "Corp releases need CAB on Thursdays",
+ * "Thursdays (Corp); ..." (the reverse order stops at a ';' or table pipe).
+ */
+function roleDayMatcher(role: string, other: string, day: string): Matcher {
+  const forward = `${role}(?:(?!${other})[^\\n.]){0,60}?(?:${day})`;
+  const reverse = `(?:${day})[^\\n.;|]{0,30}?${role}`;
+  return rx(new RegExp(`${forward}|${reverse}`, "i"));
 }
 
 /**
@@ -382,6 +461,58 @@ export function buildNightmareScenarios(): Scenario[] {
 
   // n15: cross-product write on the chain root and the Links and Jira page.
   const links = page("links");
+
+  // n16-n19: scrum project NMS (scrum.json is written by seed-scrum.ts).
+  const scrumManifest = readManifest("scrum.json");
+  const scrumJira = child(scrumManifest, "jira");
+  const scrumWiki = child(scrumManifest, "confluence");
+  const activeSprint = child(scrumJira, "activeSprint");
+  const sprintNumber = capture(field(activeSprint, "name"), /(\d+)$/);
+  const sprintGoal = capture(field(activeSprint, "goal"), /^(.+?)(?:\s+[—–-]\s+|$)/);
+  const remainingPoints = numberField(activeSprint, "remainingPoints");
+  const totalPoints = numberField(activeSprint, "totalPoints");
+  const legacyRemainingPoints = numberField(activeSprint, "legacyRemainingPoints");
+  const legacyTotalPoints = numberField(activeSprint, "legacyTotalPoints");
+
+  // n17: story in sprints 1-3; the legacy Story Points field disagrees with the estimate field.
+  const carryOver = child(scrumJira, "carryOver");
+  const carriedKey = field(carryOver, "key");
+  const carriedPoints = numberField(carryOver, "points");
+  const carriedLegacy = numberField(carryOver, "legacyPoints");
+  const carriedDuplicate = list(carryOver, "duplicateKeys")[0];
+  const carriedPartial = list(carryOver, "partialKeys")[0];
+  if (carriedDuplicate === undefined || carriedPartial === undefined) {
+    throw new Error("scrum.json carryOver lacks the duplicate or partial carry-over key");
+  }
+
+  // n18: points completed in each closed sprint; committed points (also with the legacy field) are the decoys.
+  const closedSprints = asRecords(scrumJira.velocity).map((entry) => ({
+    name: field(entry, "sprint"),
+    number: capture(field(entry, "sprint"), /(\d+)$/),
+    completed: numberField(entry, "completed"),
+    committed: numberField(entry, "committed"),
+    committedLegacy: numberField(entry, "committedLegacy"),
+  }));
+
+  // n19: backlog rows that are not [DUPLICATE]; the decoys are the full backlog and the backlog plus epics.
+  const backlog = child(scrumJira, "backlog");
+  const backlogKeys = list(backlog, "keys");
+  const duplicateKeys = list(backlog, "duplicateKeys");
+  const backlogWithDuplicates = numberField(backlog, "withDuplicates");
+  const backlogWithEpics = numberField(backlog, "withEpics");
+
+  // n20-n21: second space NMCORP; superseded draft and the same-titled Engineering page are the decoys.
+  const corpSpaceName = field(child(scrumWiki, "space"), "name");
+  const expense = child(scrumWiki, "expense");
+  const expenseDraft = child(scrumWiki, "expenseDraft");
+  const expenseReceipt = numberField(expense, "receiptEur");
+  const expenseDays = numberField(expense, "days");
+  const draftReceipt = numberField(expenseDraft, "receiptEur");
+  const draftDays = numberField(expenseDraft, "days");
+  const release = child(scrumWiki, "release");
+  const corpDay = field(release, "corpDay");
+  const engineeringDay = field(release, "engineeringDay");
+  const releaseTitle = field(child(child(scrumWiki, "pages"), "release"), "title");
 
   return [
     read(
@@ -633,5 +764,109 @@ export function buildNightmareScenarios(): Scenario[] {
         };
       },
     },
+    read(
+      "n16-current-sprint",
+      "Active sprint: name, goal, remaining points",
+      `On ${HOST}, in the NMS Scrum project (the NMS board), which sprint is active right now, what is its goal, and how many story points are still remaining in it (not yet done)?`,
+      [
+        { label: `sprint ${sprintNumber}`, answer: rx(new RegExp(`sprint\\s*${sprintNumber}(?!\\d)`, "i")) },
+        { label: "goal", answer: rx(new RegExp(escapeRegExp(sprintGoal), "i")) },
+        {
+          label: `${remainingPoints} points remaining`,
+          answer: pointsMatcher(remainingPoints),
+          decoys: [totalPoints, legacyRemainingPoints, legacyTotalPoints].map((value) => ({ name: `${value} points`, match: pointsMatcher(value) })),
+        },
+      ],
+      /\b(?:total|scope|committed|overall|planned|legacy|field|sum)\b/i,
+    ),
+    read(
+      "n17-carry-over",
+      "Story carried over from Sprint 1, estimate",
+      `On ${HOST}, in the NMS Scrum project one story was started in Sprint 1, carried over into Sprint 2 and is still open in the current sprint. Which issue is it, and what is its story point estimate?`,
+      [
+        {
+          label: `issue ${carriedKey}`,
+          answer: rx(new RegExp(`\\b${carriedKey}\\b`)),
+          decoys: [carriedDuplicate, carriedPartial].map((key) => ({ name: `${key} as the carried-over story`, match: rx(new RegExp(`\\b${key}\\b`)) })),
+        },
+        {
+          label: `${carriedPoints} points`,
+          answer: countMatcher(POINTS_LABEL, carriedPoints),
+          decoys: [{ name: `${carriedLegacy} points`, match: countMatcher(POINTS_LABEL, carriedLegacy) }],
+        },
+      ],
+      /\b(?:duplicate|twin|only|two sprints|sprint 2|legacy|field|other|another)\b/i,
+    ),
+    read(
+      "n18-velocity",
+      "Velocity of the two closed sprints",
+      `On ${HOST}, what was the velocity of the NMS team: how many story points were completed in Sprint 1 and how many in Sprint 2?`,
+      closedSprints.map((sprint) => ({
+        label: `${sprint.name}: ${sprint.completed}`,
+        answer: sprintMatcher(sprint.number, sprint.completed),
+        decoys: [sprint.committed, sprint.committedLegacy].map((value) => ({ name: `${sprint.name}: ${value}`, match: sprintMatcher(sprint.number, value) })),
+      })),
+      /\b(?:committed|commit|planned|scope|legacy|carried|incomplete|total)\b/i,
+    ),
+    read(
+      "n19-backlog-hygiene",
+      "Backlog without the [DUPLICATE] decoys",
+      `On ${HOST}, how many issues are in the backlog of the NMS board that are real work items, i.e. not duplicates of other issues? List them.`,
+      [
+        {
+          label: `${backlogKeys.length} issues`,
+          answer: (text) =>
+            countMatcher(BACKLOG_LABEL, backlogKeys.length)(text) ||
+            rx(new RegExp(`\\b${NUMBER_WORDS[backlogKeys.length] ?? "-"}\\b`, "i"))(text) ||
+            rx(new RegExp(`(?<![\\d.\\-])${backlogKeys.length} of (?:the |all )?\\d+\\b`, "i"))(text),
+          decoys: [backlogWithDuplicates, backlogWithEpics].map((value) => ({ name: `${value} issues`, match: countMatcher(BACKLOG_LABEL, value) })),
+        },
+        ...backlogKeys.map((key) => ({
+          label: key,
+          answer: rx(new RegExp(`\\b${key}\\b`)),
+          decoys:
+            key === backlogKeys[0]
+              ? [{ name: "a [DUPLICATE] issue as a real backlog item", match: rx(new RegExp(`\\b(?:${duplicateKeys.join("|")})\\b`)) }]
+              : [],
+        })),
+      ],
+      /\b(?:duplicate|duplicates|dupe|twin|twins|exclud\w*|epics?|including|holds|in total|left out|leaving|skipped|drop(?:ped)?)\b/i,
+    ),
+    read(
+      "n20-corp-expense",
+      "Current vs superseded draft expense policy",
+      `On ${HOST}, in the Confluence space "${corpSpaceName}", what does the current Expense Policy say: above which amount are receipts required, and within how many days must an expense be submitted? The space also holds an older draft; go by the policy that is in force.`,
+      [
+        {
+          label: `receipts above ${expenseReceipt} EUR`,
+          answer: eurMatcher(expenseReceipt),
+          decoys: [{ name: `${draftReceipt} EUR`, match: eurMatcher(draftReceipt) }],
+        },
+        {
+          label: `${expenseDays} days`,
+          answer: daysMatcher(expenseDays),
+          decoys: [{ name: `${draftDays} days`, match: daysMatcher(draftDays) }],
+        },
+      ],
+    ),
+    read(
+      "n21-cross-space-release",
+      "Same title in two spaces: Corp vs Engineering",
+      `On ${HOST}, two Confluence pages are titled "${releaseTitle}", one in the Corp Handbook space and one in the Engineering space (Szoftverfejlesztés). On which weekday do Corp releases need CAB approval, and how does the Engineering release process differ?`,
+      [
+        {
+          label: `Corp: ${corpDay}`,
+          answer: roleDayMatcher("corp", "engineering", `${corpDay}|csütörtök`),
+        },
+        {
+          label: `Engineering: ${engineeringDay}`,
+          answer: roleDayMatcher("engineering", "corp", `${engineeringDay}|kedd`),
+        },
+        {
+          label: "Engineering: no CAB",
+          answer: rx(/\bno\s+(?:CAB|change advisory)|without\s+(?:a\s+)?(?:CAB|change advisory)|(?:CAB|change advisory)[^\n.]{0,40}(?:not|n't)\s+(?:required|needed|necessary)|(?:doesn't|does not|don't|do not)\s+(?:need|require)[^\n.]{0,30}(?:CAB|approval)|no (?:CAB )?approval/i),
+        },
+      ],
+    ),
   ];
 }

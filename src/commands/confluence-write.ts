@@ -22,6 +22,7 @@ import {
   type ApiPage,
   type CommentKind,
   type ContentBase,
+  type ContentTarget,
 } from "./confluence.ts";
 import { shortTs } from "./common.ts";
 import { writeDiagnostic } from "../core/output.ts";
@@ -1182,6 +1183,23 @@ function lockoutQuery(allow: boolean | undefined): { query?: { "allow-self-locko
   return allow === true ? { query: { "allow-self-lockout": true } } : {};
 }
 
+/**
+ * The collection for a write that reads nothing first. A reference that does not say page or blog
+ * post costs one GET to find the collection that answers (see `probeBase`); an explicit one costs none.
+ */
+async function writeTarget(session: Session, requested: ContentTarget): Promise<ContentTarget> {
+  if (!requested.probe) {
+    return requested;
+  }
+  const { target } = await probeBase(requested, (probed) =>
+    session.http.request({
+      method: "GET",
+      url: session.confluenceUrl(`/api/v2/${probed.base}/${encodeURIComponent(probed.id)}`),
+    }),
+  );
+  return target;
+}
+
 function permissionsNext(target: { base: ContentBase; id: string }): readonly string[] {
   return [
     "atl",
@@ -1229,13 +1247,14 @@ async function writeGrants(
   flags: GrantFlags,
   method: "POST" | "PUT",
 ): Promise<unknown> {
-  const target = contentTarget(pageArg, flags.type);
+  const requested = contentTarget(pageArg, flags.type);
   const body = grantsBody(flags);
   const replace = method === "PUT";
   if (replace) {
-    requireYes(ctx, flags.yes, `Replacing all permissions on ${target.id}`);
+    requireYes(ctx, flags.yes, `Replacing all permissions on ${requested.id}`);
   }
-  const session = await openConfluence(ctx, target.site);
+  const session = await openConfluence(ctx, requested.site);
+  const target = await writeTarget(session, requested);
   const written = await sendWrite<ApiPermissionList>(
     ctx,
     session,
@@ -1331,15 +1350,16 @@ export const pagePermissionsRemove = defineCommand({
     if (flags.operation !== undefined && principal === undefined) {
       throw inputError("operation_needs_principal", "--operation needs --user or --group");
     }
-    const target = contentTarget(input.args.page ?? "", flags.type);
+    const requested = contentTarget(input.args.page ?? "", flags.type);
     requireYes(
       ctx,
       flags.yes,
       principal === undefined
-        ? `Removing all permissions from ${target.id}`
-        : `Removing ${flags.user ?? flags.group ?? ""}'s permission from ${target.id}`,
+        ? `Removing all permissions from ${requested.id}`
+        : `Removing ${flags.user ?? flags.group ?? ""}'s permission from ${requested.id}`,
     );
-    const session = await openConfluence(ctx, target.site);
+    const session = await openConfluence(ctx, requested.site);
+    const target = await writeTarget(session, requested);
     const removed = await sendWrite<unknown>(
       ctx,
       session,
@@ -1400,9 +1420,10 @@ export const pageRestrict = defineCommand({
   ],
   async run(ctx, input) {
     const { flags } = input;
-    const target = contentTarget(input.args.page ?? "", flags.type);
-    requireYes(ctx, flags.yes, `Setting ${target.id} to ${flags.state}`);
-    const session = await openConfluence(ctx, target.site);
+    const requested = contentTarget(input.args.page ?? "", flags.type);
+    requireYes(ctx, flags.yes, `Setting ${requested.id} to ${flags.state}`);
+    const session = await openConfluence(ctx, requested.site);
+    const target = await writeTarget(session, requested);
     const set = await sendWrite<ApiRestrictionState>(
       ctx,
       session,

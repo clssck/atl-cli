@@ -944,7 +944,7 @@ async function phaseCreate(): Promise<void> {
 }
 
 async function phaseRestructure(): Promise<void> {
-  // Re-parenting through issue edit (parent field).
+  // Re-parenting through issue update (parent field).
   for (const spec of specs) {
     const entry = known.get(spec.id);
     if (!entry || !spec.finalParent || spec.finalType || entry.type === "Subtask") {
@@ -953,7 +953,7 @@ async function phaseRestructure(): Promise<void> {
     const target = keyOf(spec.finalParent);
     if (entry.parent !== target) {
       await soft(`reparent ${spec.id}`, async () => {
-        await atl(`reparent ${spec.id}`, ["issue", "edit", entry.key, "--set", `parent=${JSON.stringify({ key: target })}`]);
+        await atl(`reparent ${spec.id}`, ["issue", "update", entry.key, "--set", `parent=${JSON.stringify({ key: target })}`]);
         entry.parent = target;
       });
     }
@@ -1076,7 +1076,7 @@ async function phaseHistory(): Promise<void> {
           `nm history step ${step + 1}: ${status}`,
         ]);
         if (plan.renameAfter && plan.renameAfter.step === step + 1) {
-          await atl(`rename ${id}`, ["issue", "edit", entry.key, "--summary", `${PREFIX}${plan.renameAfter.summary}`]);
+          await atl(`rename ${id}`, ["issue", "update", entry.key, "--summary", `${PREFIX}${plan.renameAfter.summary}`]);
         }
       }
       entry.status = plan.path.at(-1) ?? entry.status;

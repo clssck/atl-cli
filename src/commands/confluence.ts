@@ -135,6 +135,13 @@ interface ApiSearchResult {
   resultGlobalContainer?: { title?: string; displayUrl?: string };
 }
 
+/** Id of the page or blog post an attachment hit belongs to (its `?pageId=` url); other hits have none. */
+export function searchHitContainerId(
+  hit: Pick<ApiSearchResult, "content" | "url">,
+): string | undefined {
+  return hit.content?.type === "attachment" ? hit.url?.match(/[?&]pageId=(\d+)/)?.[1] : undefined;
+}
+
 /** Space key of a v1 search hit: the container's `/spaces/KEY` display URL, else the expanded space. */
 export function searchHitSpaceKey(
   hit: Pick<ApiSearchResult, "content" | "resultGlobalContainer">,
@@ -2489,7 +2496,14 @@ export const cql = defineCommand({
   name: "cql",
   mcpTools: ["searchConfluenceUsingCql", "searchConfluence"],
   summary: "Search Confluence with CQL; page and blog post hits omit url (see page get)",
-  args: [{ name: "query", description: "CQL query", required: true }],
+  args: [
+    {
+      name: "query",
+      description: "CQL query (unquoted words are joined)",
+      required: true,
+      variadic: true,
+    },
+  ],
   flags: CqlFlags,
   sideEffects: "none",
   examples: [
@@ -2498,7 +2512,7 @@ export const cql = defineCommand({
   ],
   async run(ctx, input) {
     const session = await openConfluence(ctx);
-    const query = input.args.query ?? "";
+    const query = input.rest.join(" ");
     let paged: Paged<ApiSearchResult>;
     try {
       paged = await paginateConfluenceV1Search<ApiSearchResult>(
@@ -2517,12 +2531,40 @@ export const cql = defineCommand({
           }),
       );
     } catch (error) {
+      if (
+        error instanceof AtlError &&
+        error.status === 400 &&
+        /Unrecognised clause/i.test(error.message)
+      ) {
+        throw new AtlError(error.message, {
+          code: error.code,
+          category: error.category,
+          status: error.status,
+          hint: 'CQL values with non-ASCII or special characters must be quoted: label = "pénzügy"',
+          cause: error,
+        });
+      }
       if (error instanceof AtlError && error.status === 400 && /\btitle\s*=/i.test(query)) {
         throw new AtlError(error.message, {
           code: error.code,
           category: error.category,
           status: error.status,
           hint: "CQL `title =` is rejected when the title contains quotes; find the page by exact title with `atl space pages <SPACE> --title <title>`, or use `title ~`",
+        });
+      }
+      if (
+        error instanceof AtlError &&
+        error.status === 500 &&
+        error.message.includes("NullPointerException")
+      ) {
+        // A text term that is only quote characters (`text ~ "\""`) makes the search index throw
+        // on every attempt: the query is at fault, so it is not a transient failure.
+        throw new AtlError(error.message, {
+          code: "invalid_cql",
+          category: "input",
+          status: error.status,
+          hint: "The server cannot evaluate this CQL; a `~` term made only of quote characters is the usual cause. Search for words instead.",
+          cause: error,
         });
       }
       throw error;
@@ -2534,6 +2576,7 @@ export const cql = defineCommand({
         type: type === "page" ? undefined : type,
         title: searchHitTitle(result),
         spaceKey: searchHitSpaceKey(result),
+        pageId: searchHitContainerId(result),
         ancestors: result.content?.ancestors?.map((ancestor) => ancestor.title),
         excerpt: snippet(result.excerpt),
         lastModified: shortTs(result.lastModified),

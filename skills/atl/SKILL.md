@@ -24,8 +24,8 @@ Non-English sites: `status list` and `--group-by status` show localized names; J
 | Search both products | `atl search "<text>" [--product jira\|confluence]` |
 | Jira query | `atl jql "<JQL>" [--limit N] [--issue-fields f1,f2] [--group-by status]` |
 | Issue | `atl issue get KEY [--comments N]` · `comments KEY` · `links KEY [--chain "is blocked by"]` · `transitions KEY` · `changelog KEY` · `tree KEY [--group-by status]` (everything under an epic incl. subtasks, or counts; `childIssuesOf()` may miss them) |
-| Issue writes | `atl issue create --project KEY --type <name> --summary "..." [--parent KEY] [--set f=v]` · `edit KEY` · `comment KEY --body ...` · `move KEY "<status>"` · `link KEY blocks KEY2` · `log KEY 2h` |
-| Fields, people, bulk | `atl project fields KEY <type>` · `atl user find "<name>"` · `atl bulk edit\|transition KEY... [--jql "<JQL>"] --plan` · `atl board issues <board>` |
+| Issue writes | `atl issue create --project KEY --type <name> --summary "..." [--parent KEY] [--set f=v]` · `update KEY` · `comment KEY --body ...` · `move KEY "<status>"` · `link KEY blocks KEY2` · `log KEY 2h` |
+| Fields, people, bulk, boards | `atl project fields KEY <type>` · `atl user find "<name>"` · `atl bulk edit\|transition KEY... [--jql "<JQL>"] --plan` · `atl board issues <board\|PROJECT> [--sprint active]` · `atl board sprints <board\|PROJECT> --summary [--state active\|closed]` (points left, carry-over, velocity; a project key replaces the board id) |
 | Confluence query | `atl cql "<CQL>" [--limit N]` |
 | Page | `atl page get <id\|url>` (has `parent {id, title}`) · `tree <id>` · `versions <id>` · `diff <id>` · `restore <id> --version N` |
 | Spaces, page writes | `atl space pages <key> [--title "..."]` · `atl page create --space KEY --title "..." --body ... [--parent <id>]` · `page update <id> [--body ...] [--title ...]` |

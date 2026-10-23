@@ -297,7 +297,7 @@ export function parseConfluenceRef(input: string): ConfluenceRef {
   throw inputError(
     "invalid_content_ref",
     `Unrecognized Confluence reference: ${input}`,
-    "Pass a page id, page URL, tiny link, or ARI",
+    "Pass a page id, page URL, tiny link, or ARI. To look a page up by title: atl space pages <SPACE> --title <title>, or atl cql 'title = \"<title>\"' when the space is unknown (titles repeat across spaces)",
   );
 }
 

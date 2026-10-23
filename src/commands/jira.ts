@@ -60,6 +60,13 @@ export const DEFAULT_ISSUE_FIELDS = [
   "project",
 ];
 
+/**
+ * Field ids sent to the API as typed (and, for writes, as typed in `--set`): custom ids and the
+ * system fields. Any other word is looked up as a field name through `resolveField`.
+ */
+export const DIRECT_FIELD =
+  /^(?:customfield_\d+|summary|description|environment|status|statuscategory|statuscategorychangedate|issuetype|priority|assignee|reporter|creator|labels|components|fixVersions|versions|duedate|parent|project|resolution|resolutiondate|created|updated|lastViewed|comment|worklog|attachment|subtasks|issuelinks|security|timetracking|timeoriginalestimate|timeestimate|timespent|aggregatetimeoriginalestimate|aggregatetimeestimate|aggregatetimespent|aggregateprogress|progress|votes|watches|workratio|issuekey)$/;
+
 // ---------------------------------------------------------------------------
 // API shapes (only the parts we read)
 // ---------------------------------------------------------------------------
@@ -218,13 +225,21 @@ function recordLabel(value: Record<string, unknown>): string | undefined {
 
 /**
  * Compact value of an extra field: user, option, component, version and issue objects become
- * their label, arrays map element-wise, numbers and other objects stay as the API sent them.
+ * their label, a sprint keeps `{id, name, state}` (the active one stands out from closed history),
+ * arrays map element-wise, numbers and other objects stay as the API sent them.
  */
 function fieldValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(fieldValue);
   }
-  return isRecord(value) ? (recordLabel(value) ?? value) : value;
+  if (!isRecord(value)) {
+    return value;
+  }
+  // A Jira Software sprint: `boardId` and `state` set it apart from components and versions.
+  if (typeof value.state === "string" && typeof value.boardId === "number") {
+    return { id: value.id, name: value.name, state: value.state };
+  }
+  return recordLabel(value) ?? value;
 }
 
 /**
@@ -272,9 +287,45 @@ export function compactIssue(
   };
 }
 
-function fieldList(raw: string | undefined, fallback: readonly string[]): string[] {
+/**
+ * The API `fields` for requested ids or names: ids, system fields and the `*all` / `-field`
+ * forms go as typed; any other entry is a display name resolved like `--group-by` does
+ * (`unknown_field` / `ambiguous_field`). `names` maps each name-resolved id to its display name,
+ * the key its value is shown under.
+ */
+async function resolveRequested(
+  session: Session,
+  requested: readonly string[],
+  byKeys: boolean | undefined,
+): Promise<{ fields: string[]; names: Map<string, string> }> {
+  const fields: string[] = [];
+  const names = new Map<string, string>();
+  let catalog: Promise<FieldRecord[]> | undefined;
+  for (const entry of requested) {
+    if (byKeys === true || /^[*-]/.test(entry) || DIRECT_FIELD.test(entry)) {
+      fields.push(entry);
+      continue;
+    }
+    catalog ??= fetchFields(session);
+    const field = resolveField(await catalog, entry);
+    fields.push(field.id);
+    if (field.id.toLowerCase() !== entry.trim().toLowerCase() && field.name !== undefined) {
+      names.set(field.id, field.name);
+    }
+  }
+  return { fields, names };
+}
+
+/** `--issue-fields` for a list: the requested fields (ids or names), else `fallback`. */
+async function requestedFields(
+  session: Session,
+  raw: string | undefined,
+  fallback: readonly string[],
+): Promise<{ fields: string[]; names: Map<string, string> }> {
   const list = splitList(raw);
-  return list.length === 0 ? [...fallback] : list;
+  return list.length === 0
+    ? { fields: [...fallback], names: new Map() }
+    : resolveRequested(session, list, false);
 }
 
 export function fetchFields(session: Session): Promise<FieldRecord[]> {
@@ -290,8 +341,12 @@ const NAMED_CUSTOM_FIELDS: readonly { clause: string; name: string }[] = [
   { clause: "Flagged", name: "flagged" },
 ];
 
-/** Custom field id -> output key for `NAMED_CUSTOM_FIELDS` on this site. */
-async function namedCustomFields(session: Session): Promise<Map<string, string>> {
+/**
+ * Custom field id -> output key for the extras `issue get` shows when set: the
+ * `NAMED_CUSTOM_FIELDS`, the Sprint field as `sprint`, and every story-point number field under
+ * its display name (a site can carry several that disagree).
+ */
+async function defaultExtraFields(session: Session): Promise<Map<string, string>> {
   const fields = await fetchFields(session);
   const names = new Map<string, string>();
   for (const { clause, name } of NAMED_CUSTOM_FIELDS) {
@@ -300,11 +355,27 @@ async function namedCustomFields(session: Session): Promise<Map<string, string>>
       names.set(id, name);
     }
   }
+  for (const f of fields) {
+    if (f.id === undefined) {
+      continue;
+    }
+    if (f.schema?.custom?.endsWith(":gh-sprint") === true) {
+      names.set(f.id, "sprint");
+    } else if (
+      f.custom === true &&
+      f.schema?.type === "number" &&
+      fieldNames(f).some((n) => /story point/i.test(n ?? ""))
+    ) {
+      names.set(f.id, f.name ?? f.id);
+    }
+  }
   return names;
 }
 
 const ISSUE_FIELDS_FLAG = Type.Optional(
-  Type.String({ description: "Comma-separated Jira field ids to request (API `fields`)" }),
+  Type.String({
+    description: "Comma-separated Jira field ids or names to request (API `fields`)",
+  }),
 );
 
 export const ISSUE_ARG = {
@@ -370,15 +441,16 @@ const issueGet = defineCommand({
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const { flags } = input;
     const requested = splitList(flags.issueFields);
-    // Without --issue-fields, compact output also shows due date, start date and flagged when set;
-    // --full asks for every field, like the raw API with `*all`.
-    const named =
-      requested.length === 0 && !ctx.full
-        ? await namedCustomFields(session)
-        : new Map<string, string>();
-    let fields = requested;
-    if (requested.length === 0) {
-      fields = ctx.full ? ["*all"] : [...DEFAULT_ISSUE_FIELDS, "duedate", ...named.keys()];
+    // Without --issue-fields, compact output also shows due date, components, fix versions, start
+    // date, flagged, sprint and story points when set; --full asks for every field, like the raw
+    // API with `*all`.
+    let fields: string[] = ["*all"];
+    let named = new Map<string, string>();
+    if (requested.length > 0) {
+      ({ fields, names: named } = await resolveRequested(session, requested, flags.fieldsByKeys));
+    } else if (!ctx.full) {
+      named = await defaultExtraFields(session);
+      fields = [...DEFAULT_ISSUE_FIELDS, "duedate", "components", "fixVersions", ...named.keys()];
     }
     const issue = await session.http.request<JiraIssue>({
       method: "GET",
@@ -740,7 +812,7 @@ export async function approximateCount(session: Session, jql: string): Promise<n
 /** `--group-by` aliases: the API field to request and the path inside its value. */
 const GROUP_ALIASES: Readonly<Record<string, { field: string; path: readonly string[] }>> = {
   status: { field: "status", path: [] },
-  statusCategory: { field: "status", path: ["statusCategory"] },
+  statusCategory: { field: "status", path: ["statusCategory", "key"] },
   assignee: { field: "assignee", path: [] },
   type: { field: "issuetype", path: [] },
   priority: { field: "priority", path: [] },
@@ -769,7 +841,12 @@ interface GroupSpec {
 
 /** The API field to request for a `--group-by` name, and the path inside its value. */
 async function groupSpec(session: Session, groupBy: string): Promise<GroupSpec> {
-  return GROUP_ALIASES[groupBy] ?? { field: await resolveFieldId(session, groupBy), path: [] };
+  return (
+    GROUP_ALIASES[groupBy] ?? {
+      field: resolveField(await fetchFields(session), groupBy).id,
+      path: [],
+    }
+  );
 }
 
 /** Issue counts per group label, largest first; issues without a value count under "(none)". */
@@ -817,12 +894,14 @@ const fieldNames = (f: FieldRecord) => [f.name, f.untranslatedName, ...(f.clause
 const describeField = (f: FieldRecord) => `${f.id ?? "?"} (${f.name ?? "unnamed"})`;
 
 /**
- * Field id for an id, name, localized name or JQL clause name (case-insensitive). An unknown or
+ * The field for an id, name, localized name or JQL clause name (case-insensitive). An unknown or
  * ambiguous name is an input error: the API silently ignores unknown `fields`, which would read
  * as "no issue has a value".
  */
-async function resolveFieldId(session: Session, wanted: string): Promise<string> {
-  const fields = await fetchFields(session);
+export function resolveField(
+  fields: readonly FieldRecord[],
+  wanted: string,
+): FieldRecord & { id: string } {
   const needle = wanted.trim().toLowerCase();
   const byId = fields.filter((f) => f.id?.toLowerCase() === needle);
   const found =
@@ -831,7 +910,7 @@ async function resolveFieldId(session: Session, wanted: string): Promise<string>
       : fields.filter((f) => fieldNames(f).some((n) => n?.toLowerCase() === needle));
   const [only] = found;
   if (found.length === 1 && only?.id !== undefined) {
-    return only.id;
+    return { ...only, id: only.id };
   }
   if (found.length > 1) {
     throw inputError(
@@ -935,7 +1014,14 @@ const jql = defineCommand({
   summary:
     "Search issues with JQL (compact items: key, summary, status, type, priority, assignee, updated; URL is <site>/browse/<key>)",
   mcpTools: ["searchJiraIssuesUsingJql"],
-  args: [{ name: "query", description: "JQL query", required: true }],
+  args: [
+    {
+      name: "query",
+      description: "JQL query (unquoted words are joined)",
+      required: true,
+      variadic: true,
+    },
+  ],
   flags: Type.Object({
     format: ADF_FORMAT_FLAG,
     issueFields: ISSUE_FIELDS_FLAG,
@@ -961,7 +1047,7 @@ const jql = defineCommand({
   ],
   async run(ctx, input) {
     const session = await openSession(ctx, { fetch: jiraDeps.fetch });
-    const query = jqlText(input.args.query ?? "");
+    const query = jqlText(input.rest.join(" "));
     if (input.flags.groupBy !== undefined) {
       conflictingFlags("--group-by", input.flags, ["limit", "cursor", "issueFields", "resultMode"]);
       return groupIssues(session, query, input.flags.groupBy);
@@ -977,7 +1063,11 @@ const jql = defineCommand({
         return { count };
       }
     }
-    const fields = fieldList(input.flags.issueFields, LIST_ISSUE_FIELDS);
+    const { fields, names } = await requestedFields(
+      session,
+      input.flags.issueFields,
+      LIST_ISSUE_FIELDS,
+    );
     const paged = await searchJql(
       session,
       pagePolicy(input.flags, { defaultLimit: 25, maxPageSize: 100 }),
@@ -998,6 +1088,7 @@ const jql = defineCommand({
               input.flags.format,
               fields.includes("description") || fields.includes("*all"),
               true,
+              names,
             ),
           ),
         };
@@ -1101,7 +1192,8 @@ const issueTree = defineCommand({
     }
     const { session, rawKey } = await issueSession(ctx, input.args.issue ?? "");
     const group = flags.groupBy === undefined ? undefined : await groupSpec(session, flags.groupBy);
-    const requested = fieldList(flags.issueFields, LIST_ISSUE_FIELDS);
+    const resolved = await requestedFields(session, flags.issueFields, LIST_ISSUE_FIELDS);
+    const requested = resolved.fields;
     const fields = group
       ? [group.field]
       : requested.includes("*all") || requested.includes("parent")
@@ -1142,10 +1234,13 @@ const issueTree = defineCommand({
       items: entries.map(({ issue, depth }) =>
         ctx.full
           ? Object.assign(issue, { depth })
-          : Object.assign(compactIssue(session, issue, flags.format, withDescription, true), {
-              parent: issue.fields?.parent?.key,
-              depth,
-            }),
+          : Object.assign(
+              compactIssue(session, issue, flags.format, withDescription, true, resolved.names),
+              {
+                parent: issue.fields?.parent?.key,
+                depth,
+              },
+            ),
       ),
       capped: capped ? true : undefined,
     };
@@ -1450,17 +1545,40 @@ export const userName = (value: JiraUser | null | undefined) =>
 
 // --- issue changelog ---
 
+interface ChangelogItem {
+  field?: string;
+  fieldId?: string;
+  from?: string | null;
+  fromString?: string | null;
+  to?: string | null;
+  toString?: string | null;
+}
+
 interface ChangelogEntry {
   id?: string;
   author?: JiraUser;
   created?: string;
-  items?: {
-    field?: string;
-    from?: string | null;
-    fromString?: string | null;
-    to?: string | null;
-    toString?: string | null;
-  }[];
+  items?: ChangelogItem[];
+}
+
+/**
+ * Status id -> name in the account's language. The changelog API records status changes in
+ * English, while every other read shows localized names; read only when a status change is shown.
+ */
+async function statusNames(
+  session: Session,
+  entries: readonly ChangelogEntry[],
+): Promise<Map<string, string>> {
+  if (!entries.some((e) => e.items?.some((c) => (c.fieldId ?? c.field) === "status") === true)) {
+    return new Map();
+  }
+  const all = await session.http.request<StatusRecord[]>({
+    method: "GET",
+    url: session.jiraUrl("/rest/api/3/status"),
+  });
+  return new Map(
+    all.flatMap((s) => (s.id === undefined || s.name === undefined ? [] : [[s.id, s.name]])),
+  );
 }
 
 const issueChangelog = defineCommand({
@@ -1484,6 +1602,17 @@ const issueChangelog = defineCommand({
     if (ctx.full) {
       return paged;
     }
+    const statuses = await statusNames(session, paged.items);
+    const label = (c: ChangelogItem, id: string | null | undefined, text: unknown) => {
+      const localized =
+        (c.fieldId ?? c.field) === "status" && id !== null && id !== undefined
+          ? statuses.get(id)
+          : undefined;
+      // The API names the display value `toString`; an absent one would resolve to
+      // Object.prototype.toString, so only a string counts. Without text, show the raw id
+      // (e.g. custom ids).
+      return localized ?? (typeof text === "string" ? text : id);
+    };
     return {
       ...paged,
       items: paged.items.map((entry) => ({
@@ -1492,11 +1621,8 @@ const issueChangelog = defineCommand({
         at: shortTs(entry.created),
         changes: entry.items?.map((c) => ({
           field: c.field,
-          // Value text, else the raw id for fields without a display string (e.g. custom ids).
-          from: c.fromString ?? c.from,
-          // The API names the display value `toString`; an absent one would resolve to
-          // Object.prototype.toString, so only a string counts.
-          to: typeof c.toString === "string" ? c.toString : c.to,
+          from: label(c, c.from, c.fromString),
+          to: label(c, c.to, c.toString),
         })),
       })),
     };
@@ -2348,7 +2474,7 @@ const propertyGet = defineCommand({
 
 // --- field / priority / resolution lookups ---
 
-interface FieldRecord {
+export interface FieldRecord {
   id?: string;
   name?: string;
   untranslatedName?: string | null;

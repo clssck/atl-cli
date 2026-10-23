@@ -130,13 +130,16 @@ const MARKDOWN_TO_ADF: Record<string, string> = {
   "https://host/a_(b)":
     "text with mark link; bare http(s) URLs are linked, balanced parentheses included",
   "[text]() / [text](<a b>)": "plain text without a link (empty or whitespace destination)",
-  "<sub>x</sub> / <sup>x</sup> / <u>x</u>": "text with mark subsup (sub / sup) / underline",
-  "other raw HTML (not <br>, <sub>, <sup>, <u>)": "kept as literal text, not interpreted",
+  "<sub>x</sub> / <sup>x</sup> / <u>x</u> / <strong>x</strong> / <em>x</em> / <del>x</del>":
+    "text with mark subsup (sub / sup) / underline / strong / em / strike",
+  "other raw HTML (not <br>, <sub>, <sup>, <u>, <strong>, <em>, <del>)":
+    "kept as literal text, not interpreted",
 };
 
 const ADF_TO_MARKDOWN: Record<string, string> = {
   heading: "# ... ######",
-  "strong / em / strike / code / link marks": "**x** / *x* / ~~x~~ / `x` / [x](url)",
+  "strong / em / strike / code / link marks":
+    "**x** / *x* / ~~x~~ / `x` / [x](url); `<strong>` / `<em>` / `<del>` where the delimiters would not re-parse (next to a word or punctuation)",
   "<u>x</u> / <sub>x</sub> / <sup>x</sup>":
     "underline / subsup marks (textColor and other marks have no syntax: plain text)",
   "bulletList / orderedList": "- item / 1. item",

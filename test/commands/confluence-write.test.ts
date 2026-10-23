@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1485,7 +1485,14 @@ describe("page.restore", () => {
   });
 });
 
+/** A bare id may be a page or a blog post: the write is preceded by one GET that finds out which. */
+function routeProbe(): void {
+  route("GET", "/api/v2/pages/123456", { id: "123456" });
+}
+
 describe("page.permissions.add", () => {
+  beforeEach(routeProbe);
+
   const RESULTS = {
     results: [
       { operation: "read", principal: { principalType: "user", principalId: "u1" } },
@@ -1563,7 +1570,10 @@ describe("page.permissions.add", () => {
       ctx({ full: true }),
     );
     expect(result).toEqual(RESULTS);
-    expect(calls).toHaveLength(1);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/api/v2/pages/123456",
+      "/api/v2/pages/123456/permissions",
+    ]);
   });
 
   test("--plan sends nothing", async () => {
@@ -1571,7 +1581,7 @@ describe("page.permissions.add", () => {
     const plan = asRecord(
       await run(pagePermissionsAdd, SUBJECT, { viewUser: ["u1"] }, ctx({ plan: true, argv })),
     );
-    expect(calls).toHaveLength(0);
+    expect(sent("POST")).toHaveLength(0);
     expect(plan.method).toBe("POST");
     expect(plan.next).toEqual([
       ["atl", "page", "permissions", "add", "123456", "--view-user", "u1"],
@@ -1579,7 +1589,80 @@ describe("page.permissions.add", () => {
   });
 });
 
+function routeBlogPost(): void {
+  route("GET", "/api/v2/pages/555", { message: "not a page" }, 404);
+  route("GET", "/api/v2/blogposts/555", { id: "555" });
+}
+describe("bare blog post id on a write that reads nothing first", () => {
+  const OPEN = { state: "OPEN" };
+
+  test("page restrict targets the blog post collection", async () => {
+    routeBlogPost();
+    route("PUT", "/api/v2/blogposts/555/restriction-state", OPEN);
+    const result = await run(pageRestrict, { page: "555" }, { state: "open", yes: true });
+    expect(onlyWrite("PUT").path).toBe("/api/v2/blogposts/555/restriction-state");
+    expect(result).toEqual({ id: "555", state: "open" });
+  });
+
+  test("permissions add, set and remove target the blog post collection", async () => {
+    routeBlogPost();
+    route("POST", "/api/v2/blogposts/555/permissions", { results: [] });
+    route("PUT", "/api/v2/blogposts/555/permissions", { results: [] });
+    route("DELETE", "/api/v2/blogposts/555/permissions", undefined, 204);
+    const page = { page: "555" };
+    const added = asRecord(await run(pagePermissionsAdd, page, { viewUser: ["u1"] }));
+    await run(pagePermissionsSet, page, { editUser: ["u1"], yes: true });
+    await run(pagePermissionsRemove, page, { all: true, yes: true });
+    expect(calls.filter((call) => call.method !== "GET").map((call) => call.path)).toEqual([
+      "/api/v2/blogposts/555/permissions",
+      "/api/v2/blogposts/555/permissions",
+      "/api/v2/blogposts/555/permissions",
+    ]);
+    expect(added.next).toEqual([
+      ["atl", "page", "permissions", "list", "555", "--type", "blogpost"],
+    ]);
+  });
+
+  test("--plan shows the blog post URL", async () => {
+    routeBlogPost();
+    const plan = asRecord(
+      await run(
+        pageRestrict,
+        { page: "555" },
+        { state: "open" },
+        ctx({ plan: true, argv: ["page", "restrict", "555", "--state", "open", "--plan"] }),
+      ),
+    );
+    expect(sent("PUT")).toHaveLength(0);
+    expect(String(plan.url)).toContain("/api/v2/blogposts/555/restriction-state");
+  });
+
+  test("a page id stays on /pages after one GET", async () => {
+    routeProbe();
+    route("PUT", "/api/v2/pages/123456/restriction-state", OPEN);
+    await run(pageRestrict, SUBJECT, { state: "open", yes: true });
+    expect(calls.map((call) => call.path)).toEqual([
+      "/api/v2/pages/123456",
+      "/api/v2/pages/123456/restriction-state",
+    ]);
+  });
+
+  test("an explicit --type sends no probe", async () => {
+    route("PUT", "/api/v2/blogposts/555/restriction-state", OPEN);
+    await run(pageRestrict, { page: "555" }, { state: "open", yes: true, type: "blogpost" });
+    expect(calls.map((call) => call.method)).toEqual(["PUT"]);
+  });
+
+  test("an id that is neither reports the page error and writes nothing", async () => {
+    const error = await errorOf(run(pageRestrict, { page: "9" }, { state: "open", yes: true }));
+    expect(error.status).toBe(404);
+    expect(sent("PUT")).toHaveLength(0);
+  });
+});
+
 describe("page.permissions.set", () => {
+  beforeEach(routeProbe);
+
   const argv = ["page", "permissions", "set", "123456", "--edit-user", "u2"];
 
   test("needs --yes: nothing is sent and the error suggests a plan", async () => {
@@ -1600,7 +1683,7 @@ describe("page.permissions.set", () => {
         ctx({ plan: true, argv: [...argv, "--plan"] }),
       ),
     );
-    expect(calls).toHaveLength(0);
+    expect(sent("PUT")).toHaveLength(0);
     expect(plan.method).toBe("PUT");
     expect(plan.next).toEqual([["atl", ...argv, "--yes"]]);
   });
@@ -1631,6 +1714,8 @@ describe("page.permissions.set", () => {
 });
 
 describe("page.permissions.remove", () => {
+  beforeEach(routeProbe);
+
   const argv = ["page", "permissions", "remove", "123456", "--user", "u1"];
 
   test("filters by principal and operation, and needs --yes", async () => {
@@ -1677,7 +1762,7 @@ describe("page.permissions.remove", () => {
         ctx({ plan: true, argv: [...argv, "--plan"] }),
       ),
     );
-    expect(calls).toHaveLength(0);
+    expect(sent("DELETE")).toHaveLength(0);
     expect(plan.method).toBe("DELETE");
     expect(plan.next).toEqual([["atl", ...argv, "--yes"]]);
   });
@@ -1708,6 +1793,8 @@ describe("page.permissions.remove", () => {
 });
 
 describe("page.restrict", () => {
+  beforeEach(routeProbe);
+
   const argv = ["page", "restrict", "123456", "--state", "edit-restricted"];
   const STATE = {
     state: "EDIT_RESTRICTED",
@@ -1762,7 +1849,7 @@ describe("page.restrict", () => {
     const open = await run(pageRestrict, SUBJECT, { state: "open", yes: true });
     expect(onlyWrite("PUT").body).toEqual({ state: "OPEN" });
     expect(open).toEqual({ id: "123456", state: "open" });
-    expect(sent("GET")).toHaveLength(0);
+    expect(calls.some((call) => call.path.endsWith("/user/bulk"))).toBe(false);
     calls = [];
     route("PUT", "/api/v2/pages/123456/restriction-state", { state: "VIEW_RESTRICTED" });
     await run(pageRestrict, SUBJECT, { state: "view-restricted", yes: true });
@@ -1792,7 +1879,7 @@ describe("page.restrict", () => {
         ctx({ plan: true, argv: [...argv, "--plan"] }),
       ),
     );
-    expect(calls).toHaveLength(0);
+    expect(sent("PUT")).toHaveLength(0);
     expect(plan.method).toBe("PUT");
     expect(plan.next).toEqual([["atl", ...argv, "--yes"]]);
   });

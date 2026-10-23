@@ -154,7 +154,15 @@ async function run(
   rest: string[] = [],
 ): Promise<unknown> {
   const context = { ...ctx, ...overrides };
-  const result = await command(name).run(context, { args, rest, flags });
+  const spec = command(name);
+  // The parser delivers a variadic positional in `rest`; tests name it like any other argument.
+  const variadic = spec.args.find((arg) => arg.variadic === true)?.name;
+  const values = variadic === undefined ? undefined : args[variadic];
+  const result = await spec.run(context, {
+    args,
+    rest: values === undefined ? rest : [values],
+    flags,
+  });
   return context.full ? result : prune(result);
 }
 
@@ -186,6 +194,15 @@ const ISSUE = {
     description: doc("Steps to reproduce"),
   },
 };
+
+/** ISSUE with extra fields, as a scrum project returns it. */
+function scrum(fields: Record<string, unknown>): typeof ISSUE {
+  return { ...ISSUE, fields: { ...ISSUE.fields, ...fields } };
+}
+
+function statusCalls(): Call[] {
+  return calls.filter((c) => c.path === "/rest/api/3/status");
+}
 
 /** Field catalogue as /field returns it on a Hungarian site: ids differ per site, clause names are English. */
 const FIELDS = [
@@ -266,7 +283,7 @@ describe("issue.get", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[1]?.query.get("fields")).toBe(
-      "summary,status,issuetype,priority,assignee,reporter,labels,parent,created,updated,description,project,duedate,customfield_10015,customfield_10021",
+      "summary,status,issuetype,priority,assignee,reporter,labels,parent,created,updated,description,project,duedate,components,fixVersions,customfield_10015,customfield_10021",
     );
     expect(result).toEqual({
       key: "ABC-123",
@@ -310,6 +327,173 @@ describe("issue.get", () => {
     );
     expect(calls[0]?.query.get("fields")).toBe("summary,status");
     expect("description" in result).toBe(false);
+  });
+
+  describe("scrum fields", () => {
+    const SCRUM_FIELDS = [
+      ...FIELDS,
+      {
+        id: "customfield_10020",
+        name: "Sprint",
+        custom: true,
+        clauseNames: ["cf[10020]", "Sprint"],
+        schema: { type: "array", items: "json", custom: "com.pyxis.greenhopper.jira:gh-sprint" },
+      },
+      {
+        id: "customfield_10016",
+        name: "Story point estimate",
+        custom: true,
+        clauseNames: ["cf[10016]", "Story point estimate"],
+        schema: {
+          type: "number",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        },
+      },
+      {
+        id: "customfield_10042",
+        name: "Story Points",
+        custom: true,
+        clauseNames: ["cf[10042]", "Story Points"],
+        schema: {
+          type: "number",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        },
+      },
+    ];
+    const SPRINTS = [
+      {
+        id: 2,
+        name: "Sprint 1",
+        state: "closed",
+        boardId: 2,
+        goal: "Ship it",
+        startDate: "2026-09-01T08:00:00.000Z",
+      },
+      { id: 4, name: "Sprint 3", state: "active", boardId: 2, goal: "Offline mode" },
+    ];
+
+    test("components, fix versions, sprints and every story-point field show when set", async () => {
+      respond({
+        "/rest/api/3/field": SCRUM_FIELDS,
+        "/rest/api/3/issue/ABC-123": scrum({
+          components: [
+            { id: "1", name: "Backend" },
+            { id: "2", name: "Frontend" },
+          ],
+          fixVersions: [{ id: "9", name: "1.1", released: false }],
+          customfield_10020: SPRINTS,
+          customfield_10016: 8,
+          customfield_10042: 13,
+        }),
+      });
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }));
+      expect(calls[1]?.query.get("fields")).toContain(
+        "components,fixVersions,customfield_10015,customfield_10021,customfield_10020,customfield_10016,customfield_10042",
+      );
+      expect(result).toMatchObject({
+        components: ["Backend", "Frontend"],
+        fixVersions: ["1.1"],
+        sprint: [
+          { id: 2, name: "Sprint 1", state: "closed" },
+          { id: 4, name: "Sprint 3", state: "active" },
+        ],
+        "Story point estimate": 8,
+        "Story Points": 13,
+      });
+    });
+
+    test("empty components, versions, sprint and story points are omitted", async () => {
+      respond({
+        "/rest/api/3/field": SCRUM_FIELDS,
+        "/rest/api/3/issue/ABC-123": scrum({
+          components: [],
+          fixVersions: [],
+          customfield_10020: null,
+          customfield_10016: null,
+        }),
+      });
+      const result = recordOf(await run("issue.get", { issue: "ABC-123" }));
+      for (const key of ["components", "fixVersions", "sprint", "Story point estimate"]) {
+        expect(key in result).toBe(false);
+      }
+    });
+
+    test("--issue-fields takes display names, sends their ids and shows values under the name", async () => {
+      respond({
+        "/rest/api/3/field": SCRUM_FIELDS,
+        "/rest/api/3/issue/ABC-123": scrum({ customfield_10020: SPRINTS, customfield_10016: 8 }),
+      });
+      const result = recordOf(
+        await run(
+          "issue.get",
+          { issue: "ABC-123" },
+          { issueFields: "summary, sprint, Story point estimate" },
+        ),
+      );
+      expect(calls.at(-1)?.query.get("fields")).toBe("summary,customfield_10020,customfield_10016");
+      expect(result.Sprint).toEqual([
+        { id: 2, name: "Sprint 1", state: "closed" },
+        { id: 4, name: "Sprint 3", state: "active" },
+      ]);
+      expect(result["Story point estimate"]).toBe(8);
+    });
+
+    test("ids and system fields need no field lookup; a sprint is still compacted", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123": scrum({ customfield_10020: SPRINTS }),
+      });
+      const result = recordOf(
+        await run("issue.get", { issue: "ABC-123" }, { issueFields: "summary,customfield_10020" }),
+      );
+      expect(calls.map((c) => c.path)).toEqual(["/rest/api/3/issue/ABC-123"]);
+      expect(result.customfield_10020).toEqual([
+        { id: 2, name: "Sprint 1", state: "closed" },
+        { id: 4, name: "Sprint 3", state: "active" },
+      ]);
+    });
+
+    test("an unknown or ambiguous --issue-fields name is an input error, not a silent drop", async () => {
+      respond({
+        "/rest/api/3/field": [
+          ...SCRUM_FIELDS,
+          { id: "customfield_10050", name: "Rank", custom: true },
+          { id: "customfield_10051", name: "rank", custom: true },
+        ],
+      });
+      const unknown = await failure(
+        run("issue.get", { issue: "ABC-123" }, { issueFields: "Sprin" }),
+      );
+      expect(unknown.code).toBe("unknown_field");
+      expect(unknown.message).toContain("customfield_10020 (Sprint)");
+      const ambiguous = await failure(
+        run("issue.get", { issue: "ABC-123" }, { issueFields: "Rank" }),
+      );
+      expect(ambiguous.code).toBe("ambiguous_field");
+      expect(calls.map((c) => c.path)).not.toContain("/rest/api/3/issue/ABC-123");
+    });
+
+    test("jql --issue-fields takes display names too", async () => {
+      respond({
+        "/rest/api/3/field": SCRUM_FIELDS,
+        "/rest/api/3/search/jql": {
+          issues: [scrum({ customfield_10020: SPRINTS, customfield_10016: 5 })],
+          isLast: true,
+        },
+      });
+      const result = await run(
+        "jql",
+        { query: "x = 1" },
+        { issueFields: "summary,Sprint,Story point estimate" },
+      );
+      expect(calls.at(-1)?.query.get("fields")).toBe("summary,customfield_10020,customfield_10016");
+      expect(itemsOf(result)[0]).toMatchObject({
+        Sprint: [
+          { id: 2, name: "Sprint 1", state: "closed" },
+          { id: 4, name: "Sprint 3", state: "active" },
+        ],
+        "Story point estimate": 5,
+      });
+    });
   });
 
   test("--comments N fetches the N newest comments", async () => {
@@ -934,7 +1118,7 @@ describe("jql", () => {
         return [calls.at(-1)?.query.get("fields"), result.groups];
       };
       expect(await grouped("assignee")).toEqual(["assignee", { Ada: 1, "(none)": 1 }]);
-      expect(await grouped("statusCategory")).toEqual(["status", { "To Do": 1, Done: 1 }]);
+      expect(await grouped("statusCategory")).toEqual(["status", { new: 1, done: 1 }]);
       expect(await grouped("project")).toEqual(["project", { A: 2 }]);
       expect(await grouped("type")).toEqual(["issuetype", { Bug: 2 }]);
     });
@@ -1606,18 +1790,36 @@ describe("api base", () => {
   });
 });
 
-const history = (id: string, field: string, from: string, to: string) => ({
+const history = (id: string, field: string, from: string, to: string, ids?: [string, string]) => ({
   id,
   author: { accountId: "acc-1", displayName: "Ada", emailAddress: "ada@example.com" },
   created: "2026-10-01T09:00:00.123+0000",
-  items: [{ field, fieldtype: "jira", fromString: from, toString: to }],
+  items: [
+    {
+      field,
+      fieldtype: "jira",
+      ...(ids === undefined ? {} : { fieldId: field, from: ids[0], to: ids[1] }),
+      fromString: from,
+      toString: to,
+    },
+  ],
 });
+
+const HUNGARIAN_STATUSES = [
+  { id: "10000", name: "Teendő" },
+  { id: "3", name: "Folyamatban" },
+  { id: "10001", name: "Kész" },
+];
 
 describe("issue.changelog", () => {
   test("compacts entries and pages by startAt", async () => {
     respond({
       "/rest/api/3/issue/ABC-123/changelog": sequence(
-        { startAt: 0, total: 3, values: [history("1", "status", "To Do", "Done")] },
+        {
+          startAt: 0,
+          total: 3,
+          values: [history("1", "priority", "Low", "High", ["4", "2"])],
+        },
         { startAt: 1, total: 3, values: [history("2", "priority", "Low", "High")] },
       ),
     });
@@ -1628,7 +1830,7 @@ describe("issue.changelog", () => {
           id: "1",
           by: "Ada",
           at: "2026-10-01T09:00:00+0000",
-          changes: [{ field: "status", from: "To Do", to: "Done" }],
+          changes: [{ field: "priority", from: "Low", to: "High" }],
         },
       ],
       nextCursor: "1",
@@ -1655,6 +1857,61 @@ describe("issue.changelog", () => {
     respond({ "/rest/api/3/issue/ABC-123/changelog": raw });
     const full = await run("issue.changelog", { issue: "ABC-123" }, {}, { full: true });
     expect(itemsOf(full)[0]).toEqual(raw.values[0]);
+  });
+
+  describe("status names", () => {
+    const moved = {
+      startAt: 0,
+      total: 2,
+      values: [
+        history("1", "status", "To Do", "In Progress", ["10000", "3"]),
+        history("2", "status", "In Progress", "Done", ["3", "10001"]),
+      ],
+    };
+
+    test("show the account's language, from the status ids, with one status lookup per call", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/changelog": moved,
+        "/rest/api/3/status": HUNGARIAN_STATUSES,
+      });
+      const result = await run("issue.changelog", { issue: "ABC-123" });
+      expect(itemsOf(result).map((entry) => entry.changes)).toEqual([
+        [{ field: "status", from: "Teendő", to: "Folyamatban" }],
+        [{ field: "status", from: "Folyamatban", to: "Kész" }],
+      ]);
+      expect(statusCalls()).toHaveLength(1);
+    });
+
+    test("a status id the site no longer lists keeps the changelog's own name", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/changelog": moved,
+        "/rest/api/3/status": [{ id: "3", name: "Folyamatban" }],
+      });
+      const result = await run("issue.changelog", { issue: "ABC-123" });
+      expect(itemsOf(result)[0]?.changes).toEqual([
+        { field: "status", from: "To Do", to: "Folyamatban" },
+      ]);
+    });
+
+    test("are not looked up without a status change, and --full keeps the raw English names and ids", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/changelog": {
+          startAt: 0,
+          total: 1,
+          values: [history("1", "priority", "Low", "High", ["4", "2"])],
+        },
+      });
+      await run("issue.changelog", { issue: "ABC-123" });
+      expect(statusCalls()).toEqual([]);
+
+      respond({
+        "/rest/api/3/issue/ABC-123/changelog": moved,
+        "/rest/api/3/status": HUNGARIAN_STATUSES,
+      });
+      const full = await run("issue.changelog", { issue: "ABC-123" }, {}, { full: true });
+      expect(itemsOf(full)[0]).toEqual(moved.values[0]);
+      expect(statusCalls()).toEqual([]);
+    });
   });
 });
 

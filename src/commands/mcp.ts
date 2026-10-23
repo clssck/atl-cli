@@ -195,9 +195,9 @@ async function discoverOperation(
   client: McpClient,
   name: string,
 ): Promise<CatalogOperation | undefined> {
-  const found = discoverResults(await client.callTool("discover", { query: name })).find(
-    (result) => isRecord(result) && result.name === name,
-  );
+  const found = discoverResults(
+    await client.callTool("discover", { query: name }, { readOnly: true }),
+  ).find((result) => isRecord(result) && result.name === name);
   if (found === undefined) {
     return undefined;
   }
@@ -417,7 +417,7 @@ async function runMcpCall(
     }
 
     if (isReadOnly(tool)) {
-      return keepRaw(await client.callTool(name, args));
+      return keepRaw(await client.callTool(name, args, { readOnly: true }));
     }
     if (ctx.plan) {
       return { type: "plan", tool: name, arguments: args, next: [applyArgvFor(ctx, true)] };

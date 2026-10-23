@@ -141,6 +141,20 @@ describe("parseConfluenceRef", () => {
   });
 });
 
+describe("a page title is not a reference", () => {
+  test("the error points at the title lookups", () => {
+    try {
+      parseConfluenceRef("atl smoke nm corp Release Process");
+    } catch (error) {
+      expect(error instanceof AtlError && error.code).toBe("invalid_content_ref");
+      expect(error instanceof AtlError && error.hint).toContain("space pages <SPACE> --title");
+      expect(error instanceof AtlError && error.hint).toContain("cql");
+      return;
+    }
+    throw new Error("expected invalid_content_ref");
+  });
+});
+
 describe("parseJiraRef", () => {
   const base = `https://${S}`;
   test.each([

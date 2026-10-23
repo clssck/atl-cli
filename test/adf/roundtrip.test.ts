@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { adfToMarkdown, markdownToAdf } from "../../src/adf/index.ts";
+import type { AdfNode } from "../../src/adf/index.ts";
 
 const REPRESENTATIVE = `# 1. Project **Plan**
 
@@ -157,6 +158,84 @@ const x = 1;
     };
     const roundTripped = markdownToAdf(adfToMarkdown(adf));
     expect(normalize(roundTripped)).toBe(normalize(adf));
+  });
+
+  test("marks next to punctuation or a word re-parse to the same marks", () => {
+    const strike = [{ type: "strike" }];
+    const strong = [{ type: "strong" }];
+    const em = [{ type: "em" }];
+    const cases: { text: string; marks?: { type: string }[] }[][] = [
+      // `**` then em then a digit: `_i_1` would not close.
+      [{ text: "**" }, { text: "i", marks: em }, { text: "1" }],
+      // intraword and punctuation-edge strike, which `~~` cannot express
+      [{ text: "a" }, { text: "b", marks: strike }, { text: "c" }],
+      [{ text: "1" }, { text: "(x)", marks: strike }, { text: "é" }],
+      // strong whose content starts or ends with punctuation beside a word
+      [{ text: "Name" }, { text: ":", marks: strong }, { text: " value" }],
+      [{ text: "a" }, { text: '"q"', marks: strong }, { text: "b" }],
+      [{ text: "x" }, { text: "y z", marks: [{ type: "strong" }, { type: "em" }] }, { text: "w" }],
+      [{ text: "word" }, { text: ",", marks: em }, { text: " next" }],
+    ];
+    for (const content of cases) {
+      const adf = {
+        type: "doc" as const,
+        version: 1 as const,
+        content: [
+          {
+            type: "paragraph",
+            content: content.map(({ text, marks }) =>
+              marks === undefined ? { type: "text", text } : { type: "text", text, marks },
+            ),
+          },
+        ],
+      };
+      expect(normalize(markdownToAdf(adfToMarkdown(adf)))).toBe(normalize(adf));
+    }
+  });
+
+  test("plain delimiters stay when they re-parse, tags only where they would not", () => {
+    const cases: [AdfNode[], string][] = [
+      [
+        [
+          { type: "text", text: "a " },
+          { type: "text", text: "b", marks: [{ type: "strike" }] },
+          { type: "text", text: " c" },
+        ],
+        "a ~~b~~ c",
+      ],
+      [
+        [
+          { type: "text", text: "a" },
+          { type: "text", text: "b", marks: [{ type: "strike" }] },
+          { type: "text", text: "c" },
+        ],
+        "a<del>b</del>c",
+      ],
+      [
+        [
+          { type: "text", text: "a" },
+          { type: "text", text: "b", marks: [{ type: "strong" }] },
+          { type: "text", text: "c" },
+        ],
+        "a**b**c",
+      ],
+    ];
+    for (const [content, markdown] of cases) {
+      expect(
+        adfToMarkdown({ type: "doc", version: 1, content: [{ type: "paragraph", content }] }),
+      ).toBe(markdown);
+    }
+  });
+
+  test("a leading or trailing no-break space is content, not blank", () => {
+    const adf = {
+      type: "doc" as const,
+      version: 1 as const,
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "\u00A0\u00A0indented\u00A0" }] },
+      ],
+    };
+    expect(markdownToAdf(adfToMarkdown(adf))).toEqual(adf);
   });
 });
 

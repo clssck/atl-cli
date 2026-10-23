@@ -1496,7 +1496,7 @@ async function createIssue(state: State, spec: IssueSpec): Promise<void> {
   // KAN's create screen has no priority field, so it is set with an edit afterwards.
   if (spec.priority !== "Medium") {
     const edited = await soft(`priority ${key}`, () =>
-      atl(`priority ${key}`, ["issue", "edit", key, "--set", `priority=${JSON.stringify({ name: spec.priority })}`]),
+      atl(`priority ${key}`, ["issue", "update", key, "--set", `priority=${JSON.stringify({ name: spec.priority })}`]),
     );
     if (edited !== null) {
       issue.priority = optionalText(edited, "priority") ?? spec.priority;

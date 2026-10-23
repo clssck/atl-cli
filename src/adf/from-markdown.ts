@@ -9,7 +9,7 @@ import type { AdfDoc, AdfMark, AdfNode } from "./types.ts";
  *
  * Choices worth knowing:
  * - Raw HTML (block or inline) is kept as literal text; `<br>` becomes a hardBreak and
- *   `<sub>`, `<sup>`, `<u>` become the subsup / underline marks.
+ *   `<sub>`, `<sup>`, `<u>`, `<strong>`, `<em>`, `<del>` become the matching marks.
  * - An image alone in its paragraph becomes `mediaSingle > media` (external URL, or
  *   `media:<id>[?collection=c]` -> file media; a link around it becomes a link mark on the media).
  *   An image sharing a paragraph with text stays inline so the paragraph is not split: a file image
@@ -317,11 +317,14 @@ function autolinkHref(href: string, children: MdChild[]): string {
 
 const BR_HTML = /^<br\s*\/?>$/i;
 
-const MARK_TAG = /^<(\/?)(sub|sup|u)>$/i;
+const MARK_TAG = /^<(\/?)(sub|sup|u|strong|em|del)>$/i;
 const TAG_MARKS: Record<string, AdfMark> = {
   sub: { type: "subsup", attrs: { type: "sub" } },
   sup: { type: "subsup", attrs: { type: "sup" } },
   u: { type: "underline" },
+  strong: { type: "strong" },
+  em: { type: "em" },
+  del: { type: "strike" },
 };
 
 /** Start of a URL the parser left as text: after a non-word character, with a host character next. */

@@ -8,7 +8,8 @@ Token and agent-friendliness eval of `atl` against the Atlassian Remote MCP (v1)
 | `lib.ts` | shared plumbing: binary path, subprocess runner, `omp toks` counts, MCP session, manifest loader |
 | `micro.ts` | one call each: 15 atl command / MCP tool pairs; bytes, Claude tokens, info-parity check |
 | `scenarios.ts` | eight natural-language scenarios (s1-s8) with answer checks from the manifest |
-| `nightmare/scenarios.ts` | fifteen scenarios (n01-n15) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence}.json` |
+| `nightmare/scenarios.ts` | twenty-one scenarios (n01-n21) on the corporate-nightmare data; checks derive from the `facts` of `.out/nightmare/{jira,confluence}.json` and the verified values of `.out/nightmare/scrum.json` |
+| `nightmare/seed-scrum.ts` | read-only verifier of the Scrum project NMS and the second space NMCORP; writes `.out/nightmare/scrum.json` |
 | `run.ts` | macro eval: headless `omp -p` agents per arm and scenario; metrics per run |
 | `report.ts` | builds `.out/report.md` from `micro.json` and the run metrics |
 
@@ -35,6 +36,12 @@ bun eval/nightmare/seed-confluence.ts    # ~143 pages under "atl smoke nm Corpor
 ```
 
 The corporate-nightmare seeders drive the CLI binary above (`NM_ATL=<path>` for another one), are idempotent (re-runs find existing content by label or title and only rebuild the manifest), and plant the `facts` the n01-n15 scenarios check. Everything they create is prefixed `atl smoke nm`.
+
+```bash
+bun eval/nightmare/seed-scrum.ts         # read-only check of project NMS and space NMCORP; manifest .out/nightmare/scrum.json
+```
+
+`seed-scrum.ts` creates nothing: the scrum data behind n16-n21 (project NMS with board, components, versions, sprints and story points; space NMCORP with labels and the `travel-limits.csv` attachment) was set up once through the browser plus `atl issue` / `atl page` creation. The script reads it back with the binary, computes the facts (remaining points, velocity, carried-over and backlog keys, policy values), exits 1 listing every divergence under `consistencyChecks`, and writes `scrum.json`. The attachment content cannot be downloaded with this token (HTTP 401), so no scenario depends on it.
 
 ## Micro eval
 

@@ -249,12 +249,17 @@ export function mapHttpError(
     });
   }
   if (status === 403) {
+    // A scope problem is reported as "scope does not match"; any other 403 is the account's own
+    // permission in the project or space, which `auth status` cannot explain.
+    const scope = server !== undefined && /scope/i.test(server);
     return new AtlError(message, {
       code,
       category: "auth",
       status,
-      hint: `Access denied: the account lacks permission or the token lacks the scope.${serverNote}`,
-      next: [["atl", "auth", "status"]],
+      hint: scope
+        ? `Access denied: the token lacks the scope this request needs.${serverNote}`
+        : `Access denied: the account lacks the permission this action needs in the project or space (for example Delete Issues or Edit Issues); ask a project admin.${serverNote}`,
+      ...(scope ? { next: [["atl", "auth", "status"]] } : {}),
     });
   }
   if (status === 404) {
@@ -306,6 +311,81 @@ function networkError(method: string, url: string, error: unknown, timeoutMs: nu
     hint: readOnly ? "Network failure; check connectivity and retry." : unknown,
     cause: error,
   });
+}
+
+export interface RetryPolicy {
+  method: HttpMethod;
+  url: string;
+  /** Only idempotent requests are retried; anything else gets exactly one attempt. */
+  idempotent: boolean;
+  send: () => Promise<Response>;
+  sleep: (ms: number) => Promise<void>;
+  /** Receives one JSONL `retry` diagnostic per retry. */
+  stderr: Writer;
+  /** Maps a non-AtlError thrown by `send` (network failure, timeout) once retries are spent. */
+  networkError: (error: unknown) => AtlError;
+}
+
+/**
+ * Shared retry loop: idempotent requests retry on 429/502/503/504 and network/timeout errors,
+ * honoring Retry-After (seconds or HTTP date), up to `MAX_ATTEMPTS` with at
+ * most `RETRY_BUDGET_MS` of total sleep. Returns the first 2xx response; anything else throws.
+ */
+export async function sendWithRetry(policy: RetryPolicy): Promise<Response> {
+  const { method, url } = policy;
+  const maxAttempts = policy.idempotent ? MAX_ATTEMPTS : 1;
+  let slept = 0;
+
+  for (let attempt = 1; ; attempt++) {
+    const backoff = BASE_BACKOFF_MS * 2 ** (attempt - 1) * (0.5 + Math.random() / 2);
+    const canWait = (waitMs: number): boolean =>
+      attempt < maxAttempts && slept + waitMs <= RETRY_BUDGET_MS;
+    const retry = async (waitMs: number, status?: number): Promise<void> => {
+      writeDiagnostic(
+        { type: "retry", status, attempt, waitMs: Math.round(waitMs), path: urlPath(url) },
+        policy.stderr,
+      );
+      slept += waitMs;
+      await policy.sleep(waitMs);
+    };
+
+    let response: Response;
+    try {
+      response = await policy.send();
+    } catch (error) {
+      if (error instanceof AtlError) {
+        throw error;
+      }
+      if (canWait(backoff)) {
+        await retry(backoff);
+        continue;
+      }
+      throw policy.networkError(error);
+    }
+
+    if (response.ok) {
+      return response;
+    }
+
+    const { status } = response;
+    const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
+    if (RETRYABLE_STATUSES.has(status) && canWait(retryAfter ?? backoff)) {
+      await response.body?.cancel();
+      await retry(retryAfter ?? backoff, status);
+      continue;
+    }
+    const error = mapHttpError(method, url, status, await response.text().catch(() => ""));
+    if (retryAfter === undefined || error.category !== "transient") {
+      throw error;
+    }
+    const seconds = Math.ceil(retryAfter / 1000);
+    throw new AtlError(error.message, {
+      code: error.code,
+      category: error.category,
+      status,
+      hint: `Rate limited or unavailable; the server asks to retry after ${seconds} s (Retry-After). Rerun then.`,
+    });
+  }
 }
 
 export function resolveTimeout(explicit: number | undefined): number {
@@ -362,61 +442,15 @@ export class HttpClient {
     url: string,
     send: () => Promise<Response>,
   ): Promise<Response> {
-    const idempotent = method === "GET" || method === "HEAD";
-    const maxAttempts = idempotent ? MAX_ATTEMPTS : 1;
-    let slept = 0;
-
-    for (let attempt = 1; ; attempt++) {
-      const backoff = BASE_BACKOFF_MS * 2 ** (attempt - 1) * (0.5 + Math.random() / 2);
-      const retry = async (waitMs: number, status?: number): Promise<void> => {
-        writeDiagnostic(
-          { type: "retry", status, attempt, waitMs: Math.round(waitMs), path: urlPath(url) },
-          this.#stderr,
-        );
-        slept += waitMs;
-        await this.#sleep(waitMs);
-      };
-
-      let response: Response;
-      try {
-        response = await send();
-      } catch (error) {
-        if (error instanceof AtlError) {
-          throw error;
-        }
-        if (attempt < maxAttempts && slept + backoff <= RETRY_BUDGET_MS) {
-          await retry(backoff);
-          continue;
-        }
-        throw networkError(method, url, error, this.#timeoutMs);
-      }
-
-      if (response.ok) {
-        return response;
-      }
-
-      const { status } = response;
-      const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
-      if (attempt < maxAttempts && RETRYABLE_STATUSES.has(status)) {
-        const waitMs = retryAfter ?? backoff;
-        if (slept + waitMs <= RETRY_BUDGET_MS) {
-          await response.body?.cancel();
-          await retry(waitMs, status);
-          continue;
-        }
-      }
-      const error = mapHttpError(method, url, status, await response.text().catch(() => ""));
-      if (retryAfter === undefined || error.category !== "transient") {
-        throw error;
-      }
-      const seconds = Math.ceil(retryAfter / 1000);
-      throw new AtlError(error.message, {
-        code: error.code,
-        category: error.category,
-        status,
-        hint: `Rate limited or unavailable; the server asks to retry after ${seconds} s (Retry-After). Rerun then.`,
-      });
-    }
+    return sendWithRetry({
+      method,
+      url,
+      idempotent: method === "GET" || method === "HEAD",
+      send,
+      sleep: this.#sleep,
+      stderr: this.#stderr,
+      networkError: (error) => networkError(method, url, error, this.#timeoutMs),
+    });
   }
 
   async #send(url: string, options: RequestOptions): Promise<Response> {
