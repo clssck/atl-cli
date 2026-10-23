@@ -283,6 +283,13 @@ describe("parseArgv flags", () => {
     expect(flagsOf(["thing", "get", "1", "--all"])).toEqual({ all: true });
   });
 
+  test("--all on a command that pages without an all flag stays unknown_flag", () => {
+    const registry = new CommandRegistry();
+    registry.register(allCommands().filter((spec) => spec.name === "search"));
+    expect(() => parseArgv(["search", "x", "--all"], registry, {})).toThrow("Unknown flag --all");
+    expect(parseArgv(["search", "x", "--limit", "5"], registry, {}).kind).toBe("run");
+  });
+
   test("repeated flags build arrays", () => {
     expect(flagsOf(["thing", "get", "1", "--set", "k=v", "--set=k2=v2"])).toEqual({
       set: ["k=v", "k2=v2"],

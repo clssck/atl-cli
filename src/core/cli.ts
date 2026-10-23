@@ -478,8 +478,14 @@ function consumeTokens(
     }
 
     const global = GLOBAL_BY_NAME.get(name);
-    // A command without paging already returns everything, so `--all` asks for nothing more.
-    if (global === undefined && name === "all" && inline === undefined) {
+    // A command with no paging flag already returns everything, so `--all` asks for nothing more. One that pages
+    // without its own --all (`search --limit/--cursor`, `--after`) keeps unknown_flag rather than quietly cutting.
+    if (
+      global === undefined &&
+      name === "all" &&
+      inline === undefined &&
+      !["limit", "cursor", "after"].some((flag) => own.has(flag))
+    ) {
       continue;
     }
     if (global === undefined) {
