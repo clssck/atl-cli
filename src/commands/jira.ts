@@ -870,13 +870,23 @@ async function walkLinkChain(session: Session, startKey: string, relation: strin
   }
 }
 
+function compactRemote(l: RemoteLink) {
+  return {
+    id: String(l.id),
+    globalId: l.globalId,
+    title: l.object?.title,
+    url: l.object?.url,
+    relationship: l.relationship,
+    application: l.application?.name ?? l.application?.type,
+  };
+}
+
 const issueLinks = defineCommand({
   name: "issue.links",
-  summary: "List issue links (or remote links with --remote)",
+  summary: "List issue links and remote (web) links",
   mcpTools: ["getJiraIssueRemoteIssueLinks", "listJiraIssueRemoteIssueLinks"],
   args: [ISSUE_ARG],
   flags: Type.Object({
-    remote: Type.Optional(Type.Boolean({ description: "List remote (web) links instead" })),
     chain: Type.Optional(
       Type.String({
         description:
@@ -892,25 +902,24 @@ const issueLinks = defineCommand({
     ),
     globalId: Type.Optional(
       Type.String({
-        description: "Return only the remote link with this globalId (implies --remote)",
+        description: "Return only the remote link with this globalId",
       }),
     ),
   }),
   sideEffects: "none",
   examples: [
     "atl issue links ABC-123",
-    "atl issue links ABC-123 --remote",
     'atl issue links ABC-123 --global-id "system=https://example.com&id=1"',
     'atl issue links ABC-123 --chain "is blocked by"',
   ],
   async run(ctx, input) {
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     if (input.flags.chain !== undefined) {
-      conflictingFlags("--chain", input.flags, ["remote", "globalId"]);
+      conflictingFlags("--chain", input.flags, ["globalId"]);
       return walkLinkChain(session, key, input.flags.chain, input.flags.max ?? 20);
     }
-    if (input.flags.remote === true || input.flags.globalId !== undefined) {
-      const globalId = input.flags.globalId;
+    const globalId = input.flags.globalId;
+    const remoteLinks = async (): Promise<RemoteLink[]> => {
       const response = await session.http
         .request<RemoteLink | RemoteLink[]>({
           method: "GET",
@@ -924,20 +933,11 @@ const issueLinks = defineCommand({
           }
           throw error;
         });
-      const links = Array.isArray(response) ? response : [response];
-      if (ctx.full) {
-        return { items: links, nextCursor: null };
-      }
-      return {
-        items: links.map((l) => ({
-          id: String(l.id),
-          globalId: l.globalId,
-          title: l.object?.title,
-          url: l.object?.url,
-          relationship: l.relationship,
-          application: l.application?.name ?? l.application?.type,
-        })),
-      };
+      return Array.isArray(response) ? response : [response];
+    };
+    if (globalId !== undefined) {
+      const links = await remoteLinks();
+      return ctx.full ? { items: links, nextCursor: null } : { items: links.map(compactRemote) };
     }
     const [issue, remote] = await Promise.all([
       session.http.request<JiraIssue>({
@@ -945,18 +945,15 @@ const issueLinks = defineCommand({
         url: session.jiraUrl(`/rest/api/3/issue/${key}`),
         query: { fields: "issuelinks" },
       }),
-      ctx.full
-        ? undefined
-        : session.http.request<RemoteLink[]>({
-            method: "GET",
-            url: session.jiraUrl(`/rest/api/3/issue/${key}/remotelink`),
-          }),
+      remoteLinks(),
     ]);
     const links = issue.fields?.issuelinks ?? [];
+    if (ctx.full) {
+      return { items: links, remote };
+    }
     return {
-      items: ctx.full ? links : links.map(compactIssueLink),
-      // Remote links are listed only with --remote; the count tells the agent they exist.
-      remote: remote === undefined || remote.length === 0 ? undefined : remote.length,
+      items: links.map(compactIssueLink),
+      remote: remote.length === 0 ? undefined : remote.map(compactRemote),
     };
   },
 });
@@ -1011,7 +1008,7 @@ const issueComments = defineCommand({
     const { flags } = input;
     const matcher = grepMatcher(ctx.full, flags);
     if (matcher !== undefined) {
-      conflictingFlags("--grep", flags, ["limit", "cursor", "all"]);
+      conflictingFlags("--grep", flags, ["limit", "cursor"]);
     }
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
     const paged = await paginateJiraOffset(
@@ -1913,6 +1910,50 @@ interface Worklog {
   comment?: AdfDoc | null;
 }
 
+const DAY_MS = 86_400_000;
+
+/** `YYYY-MM-DD` that is a real calendar date, else an input error naming the flag. */
+function isoDate(flag: string, value: string): string {
+  const parsed = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (
+    parsed === null ||
+    new Date(Date.UTC(Number(parsed[1]), Number(parsed[2]) - 1, Number(parsed[3])))
+      .toISOString()
+      .slice(0, 10) !== value
+  ) {
+    throw inputError(
+      "invalid_flag_value",
+      `${flag} must be a date as YYYY-MM-DD, got "${value}"`,
+      "Example: 2025-10-31",
+    );
+  }
+  return value;
+}
+
+/** Calendar date (`YYYY-MM-DD`) of a Jira timestamp in an IANA zone; an unknown zone is an input error. */
+function localDate(zone: string): (timestamp: string) => string | undefined {
+  let format: Intl.DateTimeFormat;
+  try {
+    format = new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch {
+    throw inputError(
+      "invalid_flag_value",
+      `--tz is not a known IANA time zone: "${zone}"`,
+      "Example: Europe/Budapest or UTC",
+    );
+  }
+  return (timestamp) => {
+    // Jira writes the offset as +0000; Date wants +00:00.
+    const instant = new Date(timestamp.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+    return Number.isNaN(instant.getTime()) ? undefined : format.format(instant);
+  };
+}
+
 const issueWorklogs = defineCommand({
   name: "issue.worklogs",
   summary: "List worklogs (logged time) on an issue",
@@ -1925,6 +1966,24 @@ const issueWorklogs = defineCommand({
     startedBefore: Type.Optional(
       Type.Integer({ minimum: 0, description: "Only worklogs started before this epoch-ms time" }),
     ),
+    since: Type.Optional(
+      Type.String({
+        description:
+          "Only worklogs started on or after this date (YYYY-MM-DD, in --tz); reads every page",
+      }),
+    ),
+    until: Type.Optional(
+      Type.String({
+        description:
+          "Only worklogs started on or before this date (YYYY-MM-DD, in --tz); reads every page",
+      }),
+    ),
+    tz: Type.Optional(
+      Type.String({
+        description:
+          "IANA zone whose calendar date of `started` --since/--until compare (default UTC)",
+      }),
+    ),
     expand: Type.Optional(Type.String({ description: "API `expand`, e.g. properties" })),
     format: ADF_FORMAT_FLAG,
     ...PAGING_FLAGS,
@@ -1933,38 +1992,74 @@ const issueWorklogs = defineCommand({
   examples: [
     "atl issue worklogs ABC-123",
     "atl issue worklogs ABC-123 --started-after 1767225600000",
+    "atl issue worklogs ABC-123 --since 2025-10-01 --until 2025-10-31 --tz Europe/Budapest",
   ],
   async run(ctx, input) {
+    const { flags } = input;
+    const filtered = flags.since !== undefined || flags.until !== undefined;
+    if (filtered) {
+      conflictingFlags("--since/--until", flags, [
+        "limit",
+        "cursor",
+        "all",
+        "startedAfter",
+        "startedBefore",
+      ]);
+    } else if (flags.tz !== undefined) {
+      throw inputError(
+        "invalid_flag_value",
+        "--tz needs --since or --until",
+        "Add --since/--until.",
+      );
+    }
+    const since = flags.since === undefined ? undefined : isoDate("--since", flags.since);
+    const until = flags.until === undefined ? undefined : isoDate("--until", flags.until);
+    const dateOf = localDate(flags.tz ?? "UTC");
     const { session, key } = await issueSession(ctx, input.args.issue ?? "");
-    const paged = await offsetList<Worklog>(
+    const read = await offsetList<Worklog>(
       session,
       `/rest/api/3/issue/${key}/worklog`,
-      input.flags,
+      filtered ? { all: true } : flags,
       {
-        startedAfter: input.flags.startedAfter,
-        startedBefore: input.flags.startedBefore,
-        expand: input.flags.expand,
+        // Every zone is within a day of UTC, so a day of margin keeps the server window wider than the local one.
+        startedAfter:
+          since === undefined ? flags.startedAfter : Date.parse(`${since}T00:00:00Z`) - DAY_MS,
+        startedBefore:
+          until === undefined ? flags.startedBefore : Date.parse(`${until}T00:00:00Z`) + 2 * DAY_MS,
+        expand: flags.expand,
       },
       (page) => page.worklogs,
       100,
     );
+    const paged = filtered
+      ? {
+          ...read,
+          items: read.items.filter((w) => {
+            const day = w.started === undefined ? undefined : dateOf(w.started);
+            return (
+              day !== undefined &&
+              (since === undefined || day >= since) &&
+              (until === undefined || day <= until)
+            );
+          }),
+        }
+      : read;
+    const totalSeconds = paged.items.reduce((sum, w) => sum + (w.timeSpentSeconds ?? 0), 0);
     if (ctx.full) {
-      return paged;
+      return filtered ? { ...paged, totalSeconds } : paged;
     }
     return {
       ...paged,
-      // Sum of the listed worklogs; the issue total with --all.
-      totalSeconds:
-        paged.items.length === 0
-          ? undefined
-          : paged.items.reduce((sum, w) => sum + (w.timeSpentSeconds ?? 0), 0),
+      // Sum of the listed worklogs; the issue total when every page is read.
+      totalSeconds: paged.items.length === 0 ? undefined : totalSeconds,
+      total: paged.items.length === 0 ? undefined : humanDuration(totalSeconds),
       items: paged.items.map((w) => ({
         id: w.id,
         by: userName(w.author),
         started: shortTs(w.started),
         time: w.timeSpent,
         seconds: w.timeSpentSeconds,
-        comment: body(w.comment, input.flags.format),
+        comment: body(w.comment, flags.format),
       })),
     };
   },

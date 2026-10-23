@@ -420,11 +420,18 @@ describe("page.get parent and --grep", () => {
     expect(result).toMatchObject({ lines: 2, matches: [{ from: 2, text: ["<p>two COLD</p>"] }] });
   });
 
+  test("a leading (?i) is accepted and matched like the bare pattern", async () => {
+    route("/api/v2/pages/123456", GREP_PAGE);
+    const plain = await run(pageGet, { page: "123456" }, { grep: "cold" });
+    const inline = await run(pageGet, { page: "123456" }, { grep: "(?i)COLD" });
+    expect(inline).toEqual(plain);
+  });
+
   test("an invalid regex and unusable flag combinations are input errors before any request", async () => {
     const bad = await rejection(run(pageGet, { page: "123456" }, { grep: "(" }));
     expect(bad.code).toBe("invalid_regex");
     expect(bad.category).toBe("input");
-    const inline = await rejection(run(pageGet, { page: "123456" }, { grep: "(?i)laptop" }));
+    const inline = await rejection(run(pageGet, { page: "123456" }, { grep: "(?s)laptop" }));
     expect(inline.code).toBe("invalid_regex");
     expect(inline.hint).toMatch(/already match case-insensitively/);
     const orphan = await rejection(run(pageGet, { page: "123456" }, { context: 2 }));

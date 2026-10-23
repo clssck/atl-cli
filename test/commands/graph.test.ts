@@ -859,7 +859,7 @@ describe("graph.add", () => {
       target: "https://acme.atlassian.net/wiki/spaces/ENG/pages/196802",
       title: "atl smoke linked page",
       remoteLinkId: "10001",
-      next: [["atl", "issue", "links", "ENG-3", "--remote"]],
+      next: [["atl", "issue", "links", "ENG-3"]],
     });
   });
 

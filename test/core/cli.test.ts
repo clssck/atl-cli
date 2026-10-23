@@ -277,6 +277,12 @@ describe("parseArgv flags", () => {
     expect(flagsOf(["thing", "get", "1"])).toEqual({ all: false });
   });
 
+  test("--all is a no-op for a command without an all flag and unchanged for one that has it", () => {
+    expect(parseRun(["echo", "--all"]).input.flags).toEqual({});
+    expect(parseError(["echo", "--alll"]).code).toBe("unknown_flag");
+    expect(flagsOf(["thing", "get", "1", "--all"])).toEqual({ all: true });
+  });
+
   test("repeated flags build arrays", () => {
     expect(flagsOf(["thing", "get", "1", "--set", "k=v", "--set=k2=v2"])).toEqual({
       set: ["k=v", "k2=v2"],
@@ -400,11 +406,13 @@ describe("parseArgv positionals and commands", () => {
     expect(page.hint).toContain('Commands in "page": get');
   });
 
-  test("--grep -i is an input error that says --grep is case-insensitive", () => {
-    const error = navError(["thing", "get", "--grep", "-i", "needle"]);
-    expect(error.code).toBe("invalid_flag_value");
-    expect(error.category).toBe("input");
-    expect(error.hint).toContain("already matches case-insensitively");
+  test("--grep -i PATTERN drops the -i; a bare -i elsewhere is still an unknown short flag", () => {
+    const parsed = parseArgv(["thing", "get", "--grep", "-i", "needle"], navRegistry(), {});
+    if (parsed.kind !== "run") {
+      throw new Error(`expected run, got ${parsed.kind}`);
+    }
+    expect(parsed.input.flags).toEqual({ grep: "needle" });
+    expect(navError(["thing", "get", "-i", "--grep", "x"]).code).toBe("unknown_flag");
   });
 
   test("single-word command and group-only invocation", () => {

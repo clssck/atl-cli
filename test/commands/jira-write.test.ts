@@ -1778,7 +1778,7 @@ describe("issue.remote-link.add", () => {
     expect(result).toEqual({
       id: "10002",
       issue: "ABC-123",
-      next: [["atl", "issue", "links", "ABC-123", "--remote"]],
+      next: [["atl", "issue", "links", "ABC-123"]],
     });
   });
 

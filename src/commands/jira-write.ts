@@ -1292,7 +1292,7 @@ const issueRemoteLinkAdd = defineCommand({
           },
         },
       },
-      ["atl", "issue", "links", rawKey, "--remote"],
+      ["atl", "issue", "links", rawKey],
     );
     if (isPlan(created) || ctx.full) {
       return created;
@@ -1300,7 +1300,7 @@ const issueRemoteLinkAdd = defineCommand({
     return {
       id: created.id === undefined ? undefined : String(created.id),
       issue: rawKey,
-      next: [["atl", "issue", "links", rawKey, "--remote"]],
+      next: [["atl", "issue", "links", rawKey]],
     };
   },
 });
@@ -1312,7 +1312,7 @@ const issueRemoteLinkDelete = defineCommand({
     ISSUE_ARG,
     {
       name: "linkId",
-      description: "Web link id (see `atl issue links <issue> --remote`); or use --global-id",
+      description: "Web link id (see `atl issue links <issue>`); or use --global-id",
     },
   ],
   flags: Type.Object({
@@ -1334,7 +1334,7 @@ const issueRemoteLinkDelete = defineCommand({
       throw inputError(
         "invalid_selection",
         "Pass either a link id or --global-id, not both and not neither",
-        "List the links with `atl issue links <issue> --remote`.",
+        "List the links with `atl issue links <issue>`.",
       );
     }
     const { session, key, rawKey } = await issueSession(ctx, input.args.issue ?? "");
@@ -1358,7 +1358,7 @@ const issueRemoteLinkDelete = defineCommand({
               `/rest/api/3/issue/${key}/remotelink/${encodeURIComponent(linkId)}`,
             ),
           },
-      ["atl", "issue", "links", rawKey, "--remote"],
+      ["atl", "issue", "links", rawKey],
       true,
     );
     if (isPlan(sent)) {
@@ -1367,7 +1367,7 @@ const issueRemoteLinkDelete = defineCommand({
     return {
       deleted: linkId ?? flags.globalId,
       issue: rawKey,
-      next: [["atl", "issue", "links", rawKey, "--remote"]],
+      next: [["atl", "issue", "links", rawKey]],
     };
   },
 });

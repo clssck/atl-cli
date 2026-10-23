@@ -12,7 +12,7 @@ description: "Read, search and edit Jira and Confluence via the `atl` JSON CLI: 
 |---|---|
 | Ref | `atl get <key\|url>` |
 | Search | `atl search "text"` (no `--space`) · `cql "space = KEY AND title ~ \"x\"" [--limit N]` · `jql "<JQL>" [--issue-fields f,worklog\|--group-by f]` |
-| Issue | `atl issue get KEY [--grep re]` · `comments KEY [--grep re\|--all]` · `links KEY --chain "is blocked by"` · `tree KEY [--depth N] [--issue-fields f\|--group-by status]` |
+| Issue | `atl issue get KEY [--grep re]` · `comments KEY [--grep re\|--all]` · `links KEY [--chain "is blocked by"]` (+web links) · `worklogs KEY --since D --until D [--tz Z]` (total) · `tree KEY [--depth N] [--issue-fields f\|--group-by status]` |
 | Board | `atl board sprints <PROJECT\|board> --summary [--state active\|closed\|future]` · `board issues <PROJECT\|board> --dataset backlog\|--sprint active [--issue-fields f]` |
 | Page | `atl page get <id\|"title"> [--space KEY] [--grep re]` · `page ancestors\|children\|tree ID` |
 | Page meta | `atl page versions ID` · `diff ID --from N --to M` · `properties ID` · `atl comment list ID --kind all --replies` |

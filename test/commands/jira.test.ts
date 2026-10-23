@@ -1029,12 +1029,13 @@ describe("issue.links", () => {
           status: "Done",
         },
       ],
-      remote: 2,
+      remote: [{ id: "1" }, { id: "2" }],
     });
   });
 
-  test("--remote lists remote links", async () => {
+  test("lists remote links next to the issue links", async () => {
     respond({
+      "/rest/api/3/issue/ABC-123": { id: "1", key: "ABC-123", fields: { issuelinks: [] } },
       "/rest/api/3/issue/ABC-123/remotelink": [
         {
           id: 10000,
@@ -1045,8 +1046,9 @@ describe("issue.links", () => {
         },
       ],
     });
-    expect(await run("issue.links", { issue: "ABC-123" }, { remote: true })).toEqual({
-      items: [
+    expect(await run("issue.links", { issue: "ABC-123" })).toEqual({
+      items: [],
+      remote: [
         {
           id: "10000",
           globalId: "system=https://example.com&id=1",
@@ -1067,13 +1069,15 @@ describe("issue.links", () => {
     expect(calls[0]?.query.get("globalId")).toBe("system=x&id=9");
   });
 
-  test("--remote without --global-id still fails on a 404", async () => {
-    respond({});
-    const error = await failure(run("issue.links", { issue: "ABC-123" }, { remote: true }));
+  test("a failing remote link request fails the command", async () => {
+    respond({
+      "/rest/api/3/issue/ABC-123": { id: "1", key: "ABC-123", fields: { issuelinks: [] } },
+    });
+    const error = await failure(run("issue.links", { issue: "ABC-123" }));
     expect(error.status).toBe(404);
   });
 
-  test("no remote count when the issue has no remote links", async () => {
+  test("no remote key when the issue has no remote links", async () => {
     respond({
       "/rest/api/3/issue/ABC-123": { id: "1", key: "ABC-123", fields: { issuelinks: [] } },
       "/rest/api/3/issue/ABC-123/remotelink": [],
@@ -1155,9 +1159,9 @@ describe("issue.links", () => {
       });
     });
 
-    test("cannot be combined with --remote", async () => {
+    test("--global-id cannot be combined with --chain", async () => {
       const error = await failure(
-        run("issue.links", { issue: "ABC-1" }, { chain: "blocks", remote: true }),
+        run("issue.links", { issue: "ABC-1" }, { chain: "blocks", globalId: "x" }),
       );
       expect(error.code).toBe("conflicting_flags");
     });
@@ -1330,9 +1334,9 @@ describe("issue.comments", () => {
       });
     });
 
-    test("--grep cannot be combined with paging flags and fails before any request", async () => {
+    test("--grep cannot be combined with --limit or --cursor and fails before any request", async () => {
       respond({ "/rest/api/3/issue/ABC-123/comment": { startAt: 0, total: 0, comments: [] } });
-      for (const paging of [{ limit: 5 }, { cursor: "3" }, { all: true }]) {
+      for (const paging of [{ limit: 5 }, { cursor: "3" }]) {
         const error = await failure(
           run("issue.comments", { issue: "ABC-123" }, { grep: "x", ...paging }),
         );
@@ -1340,6 +1344,22 @@ describe("issue.comments", () => {
         expect(error.message).toContain("--grep cannot be combined with");
       }
       expect(calls).toEqual([]);
+    });
+
+    test("--grep with --all searches every comment like --grep alone", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/comment": {
+          startAt: 0,
+          total: 1,
+          comments: [comment("1", "Ann", "vendor")],
+        },
+      });
+      const withAll = await run(
+        "issue.comments",
+        { issue: "ABC-123" },
+        { grep: "vendor", all: true },
+      );
+      expect(recordOf(withAll).matches).toBe(1);
     });
 
     test("bad usage is an input error before any request", async () => {
@@ -2146,7 +2166,7 @@ describe("MCP read parity flags", () => {
     expect(items[1]).toEqual({ id: "11", name: "Start", to: "In Progress" });
   });
 
-  test("issue.links --global-id implies --remote, sends globalId and accepts a single object", async () => {
+  test("issue.links --global-id sends globalId and accepts a single object", async () => {
     respond({
       "/rest/api/3/issue/ABC-123/remotelink": {
         id: 10000,
@@ -2395,6 +2415,13 @@ describe("issue.worklogs", () => {
     timeSpentSeconds: 5400,
     comment: doc("Fixed it"),
   };
+  const at = (id: string, started: string, seconds: number) => ({
+    ...WORKLOG,
+    id,
+    started,
+    timeSpentSeconds: seconds,
+    timeSpent: `${seconds}s`,
+  });
 
   test("sends the time window and renders comments", async () => {
     respond({ "/rest/api/3/issue/ABC-123/worklog": { startAt: 0, total: 1, worklogs: [WORKLOG] } });
@@ -2408,6 +2435,7 @@ describe("issue.worklogs", () => {
     expect(calls[0]?.query.get("expand")).toBe("properties");
     expect(result).toEqual({
       totalSeconds: 5400,
+      total: "1h 30m",
       items: [
         {
           id: "9",
@@ -2432,6 +2460,90 @@ describe("issue.worklogs", () => {
     const result = recordOf(await run("issue.worklogs", { issue: "ABC-123" }));
     expect(result.totalSeconds).toBe(8100);
     expect(itemsOf(result).map((w) => w.seconds)).toEqual([5400, 2700]);
+  });
+
+  describe("--since/--until/--tz", () => {
+    const LOGS = [
+      at("1", "2025-09-30T21:30:00.000+0000", 3600),
+      at("2", "2025-09-30T22:30:00.000+0000", 7200),
+      at("3", "2025-10-31T22:30:00.000+0000", 1800),
+      at("4", "2025-10-31T23:30:00.000+0000", 600),
+    ];
+
+    test("the local calendar date of started decides, across midnight and the DST change", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/worklog": { startAt: 0, total: 4, worklogs: LOGS },
+      });
+      const result = recordOf(
+        await run(
+          "issue.worklogs",
+          { issue: "ABC-123" },
+          { since: "2025-10-01", until: "2025-10-31", tz: "Europe/Budapest" },
+        ),
+      );
+      // 22:30Z on 2025-09-30 is already 2025-10-01 in Budapest (UTC+2); 23:30Z on 2025-10-31 is 2025-11-01 (UTC+1).
+      expect(itemsOf(result).map((w) => w.id)).toEqual(["2", "3"]);
+      expect(result.totalSeconds).toBe(9000);
+      expect(result.total).toBe("2h 30m");
+      // The server window is a day wider on each side; the local date filter is exact.
+      expect(calls[0]?.query.get("startedAfter")).toBe(String(Date.UTC(2025, 8, 30)));
+      expect(calls[0]?.query.get("startedBefore")).toBe(String(Date.UTC(2025, 10, 2)));
+    });
+
+    test("dates default to UTC and bounds are inclusive", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/worklog": { startAt: 0, total: 4, worklogs: LOGS },
+      });
+      const result = recordOf(
+        await run(
+          "issue.worklogs",
+          { issue: "ABC-123" },
+          { since: "2025-09-30", until: "2025-09-30" },
+        ),
+      );
+      expect(itemsOf(result).map((w) => w.id)).toEqual(["1", "2"]);
+      expect(result.totalSeconds).toBe(10800);
+    });
+
+    test("reads every page", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/worklog": sequence(
+          { startAt: 0, total: 3, worklogs: LOGS.slice(0, 2) },
+          { startAt: 2, total: 3, worklogs: LOGS.slice(2, 3) },
+        ),
+      });
+      const result = recordOf(
+        await run("issue.worklogs", { issue: "ABC-123" }, { since: "2025-09-01" }),
+      );
+      expect(calls).toHaveLength(2);
+      expect(itemsOf(result)).toHaveLength(3);
+    });
+
+    test("--all adds the total of every worklog", async () => {
+      respond({
+        "/rest/api/3/issue/ABC-123/worklog": { startAt: 0, total: 4, worklogs: LOGS },
+      });
+      const result = recordOf(await run("issue.worklogs", { issue: "ABC-123" }, { all: true }));
+      expect(result.totalSeconds).toBe(13200);
+      expect(result.total).toBe("3h 40m");
+    });
+
+    test("bad usage is an input error before any request", async () => {
+      respond({});
+      const cases: [Record<string, unknown>, string][] = [
+        [{ since: "2025-10-01", tz: "Mars/Base" }, "invalid_flag_value"],
+        [{ since: "2025-02-30" }, "invalid_flag_value"],
+        [{ until: "yesterday" }, "invalid_flag_value"],
+        [{ tz: "UTC" }, "invalid_flag_value"],
+        [{ since: "2025-10-01", limit: 5 }, "conflicting_flags"],
+        [{ since: "2025-10-01", cursor: "1" }, "conflicting_flags"],
+        [{ since: "2025-10-01", startedAfter: 1000 }, "conflicting_flags"],
+      ];
+      for (const [flags, code] of cases) {
+        expect((await failure(run("issue.worklogs", { issue: "ABC-123" }, flags))).code).toBe(code);
+      }
+      expect(calls).toEqual([]);
+    });
   });
 
   test("an empty issue prints an empty items list; --full is raw", async () => {

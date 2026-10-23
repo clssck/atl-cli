@@ -1507,7 +1507,7 @@ const graphAdd = defineCommand({
         title,
         remoteLinkId:
           typeof remoteId === "number" || typeof remoteId === "string" ? String(remoteId) : null,
-        next: [["atl", "issue", "links", sourceKey, "--remote"]],
+        next: [["atl", "issue", "links", sourceKey]],
       };
     }
 

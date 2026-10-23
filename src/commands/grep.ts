@@ -1,15 +1,15 @@
 import { inputError } from "../core/errors.ts";
 import { bodyLines } from "./common.ts";
 
-/** Case-insensitive line matcher for `--grep`; a bad pattern is an input error. */
+/** Case-insensitive line matcher for `--grep`; a leading `(?i)` is accepted, a bad pattern is an input error. */
 export function grepPattern(source: string): RegExp {
   try {
-    return new RegExp(source, "i");
+    return new RegExp(source.startsWith("(?i)") ? source.slice(4) : source, "i");
   } catch (error) {
     throw inputError(
       "invalid_regex",
       `--grep is not a valid regular expression: ${error instanceof Error ? error.message : source}`,
-      "Patterns use JavaScript regex syntax and already match case-insensitively; inline flags such as (?i) are not supported. Escape literal ( ) [ ] { } . * + ? | ^ $ with a backslash",
+      "Patterns use JavaScript regex syntax and already match case-insensitively; only a leading (?i) is accepted, other inline flags are not supported. Escape literal ( ) [ ] { } . * + ? | ^ $ with a backslash",
     );
   }
 }

@@ -456,15 +456,11 @@ function consumeTokens(
           "invalid_flag_value",
         );
       }
-      const raw = info.kind === "boolean" ? (inline ?? "true") : takeValue(`--${name}`);
-      if (name === "grep" && raw === "-i") {
-        throw new AtlError("--grep was given -i, which is not a flag", {
-          code: "invalid_flag_value",
-          category: "input",
-          hint: "--grep already matches case-insensitively; drop -i and pass only the pattern. To search for the literal text -i, write \\-i",
-          next: [["atl", "commands", "run", "--fields", spec.name]],
-        });
+      // `--grep -i PATTERN`: matching is already case-insensitive, so a leading -i is dropped.
+      if (name === "grep" && inline === undefined && tokens[i + 1] === "-i") {
+        i++;
       }
+      const raw = info.kind === "boolean" ? (inline ?? "true") : takeValue(`--${name}`);
       const value = coerce(spec, info, raw);
       if (info.list) {
         const existing = flags[info.key];
@@ -482,6 +478,10 @@ function consumeTokens(
     }
 
     const global = GLOBAL_BY_NAME.get(name);
+    // A command without paging already returns everything, so `--all` asks for nothing more.
+    if (global === undefined && name === "all" && inline === undefined) {
+      continue;
+    }
     if (global === undefined) {
       const suggestion = closestMatch(name, [...own.keys(), ...GLOBAL_BY_NAME.keys()]);
       throw commandError(
