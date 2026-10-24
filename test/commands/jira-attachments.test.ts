@@ -390,16 +390,20 @@ describe("issue.attachment.add", () => {
     });
   });
 
-  test("a quote or newline in the file name is stored as Jira stores it (`_`), not as a percent escape", async () => {
-    serve({ [route]: json([ATTACHMENT]) });
-    const dir = join(root, "q");
-    await mkdir(dir);
-    const odd = join(dir, 'we"ird;name.txt');
-    await Bun.write(odd, BYTES);
-    await run("issue.attachment.add", { issue: "ABC-1" }, {}, { rest: [odd] });
-    const file = sent[0]?.form?.get("file");
-    expect(file instanceof File ? file.name : undefined).toBe("we_ird;name.txt");
-  });
+  // Windows file names cannot contain `"`, so the case cannot arise there.
+  test.skipIf(process.platform === "win32")(
+    "a quote or newline in the file name is stored as Jira stores it (`_`), not as a percent escape",
+    async () => {
+      serve({ [route]: json([ATTACHMENT]) });
+      const dir = join(root, "q");
+      await mkdir(dir);
+      const odd = join(dir, 'we"ird;name.txt');
+      await Bun.write(odd, BYTES);
+      await run("issue.attachment.add", { issue: "ABC-1" }, {}, { rest: [odd] });
+      const file = sent[0]?.form?.get("file");
+      expect(file instanceof File ? file.name : undefined).toBe("we_ird;name.txt");
+    },
+  );
 
   test("a missing file or a directory fails before any request", async () => {
     serve({});

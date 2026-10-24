@@ -38,7 +38,6 @@
     "compile:windows": "bun build --compile --minify --bytecode --target=bun-windows-x64 src/main.ts --outfile dist/atl.exe",
     "compile:linux": "bun build --compile --minify --bytecode --target=bun-linux-x64 src/main.ts --outfile dist/atl-linux",
     "prepack": "bun scripts/sync-plugin-version.ts --check && bun run build",
-    "prepublishOnly": "bun run prepack",
     "version": "bun scripts/sync-plugin-version.ts && bun scripts/cut-changelog.ts && git add plugin.json CHANGELOG.md",
     "test:platform": "bun scripts/platform-smoke.ts"
   },

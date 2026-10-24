@@ -37,13 +37,16 @@ describe("config", () => {
     expect(await loadConfig(env)).toEqual({});
   });
 
-  test("save then load round-trips; dir is 0700, file 0600, no tmp files left", async () => {
+  test("save then load round-trips with no tmp files left", async () => {
     await saveConfig(sample, env);
     expect(await loadConfig(env)).toEqual(sample);
+    expect(await readdir(configDir)).toEqual(["config.json"]);
+  });
 
+  test.skipIf(process.platform === "win32")("dir is 0700 and file 0600", async () => {
+    await saveConfig(sample, env);
     expect((await stat(configDir)).mode & 0o777).toBe(0o700);
     expect((await stat(join(configDir, "config.json"))).mode & 0o777).toBe(0o600);
-    expect(await readdir(configDir)).toEqual(["config.json"]);
   });
 
   test("save overwrites an existing config", async () => {
