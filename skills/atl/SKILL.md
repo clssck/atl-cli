@@ -41,7 +41,7 @@ JSON CLI for Confluence and Jira Cloud over REST. Two jobs: answer internal ques
 | Symptom | Fix |
 |---|---|
 | `atl: command not found` (exit 127) | Not installed. Needs Node.js and Bun >= 1.4.4 (`node --version`, `bun --version`; missing → https://nodejs.org, https://bun.sh). Run `bun add -g @clssck/atl-cli` (puts `atl` in `~/.bun/bin`) when the user asked you to set things up; otherwise give them that command. Still not found → `~/.bun/bin` is not on PATH: run `~/.bun/bin/atl` or open a new shell |
-| `env: node: No such file or directory` | The `atl` launcher starts under Node.js: install Node.js (any current LTS), then retry |
+| `env: node: No such file or directory`, or stderr `atl_not_runnable` | The `atl` launcher starts under Node.js and then Bun: install Node.js (any current LTS) or Bun >= 1.4.4, whichever is missing, then retry |
 | `not_logged_in`, `http_401` | The user runs `atl auth login` (browser approval; you cannot complete it), then `atl doctor` |
 | `atl doctor` lists `missing` | Run each `next`; `ok: true` = ready |
 | stderr `atl_version_mismatch`, or a skill command not in `atl --help` | CLI and skill differ: `bun add -g @clssck/atl-cli@latest`, then `atl skill update` |

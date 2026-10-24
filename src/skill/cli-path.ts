@@ -48,7 +48,7 @@ export async function cliOnPath(env: NodeJS.ProcessEnv, probe: CliProbe = {}): P
 
 /** What is wrong with the `atl` on PATH and how to fix it; undefined when it matches `expected`. */
 export interface CliProblem {
-  code: "atl_not_on_path" | "atl_version_mismatch";
+  code: "atl_not_on_path" | "atl_not_runnable" | "atl_version_mismatch";
   message: string;
   hint: string;
   next: NextCommand[];
@@ -63,7 +63,15 @@ export function cliProblem(cli: CliOnPath, expected: string = VERSION): CliProbl
       next: [["bun", "add", "-g", PACKAGE_NAME]],
     };
   }
-  if (cli.version !== undefined && cli.version !== expected) {
+  if (cli.version === undefined) {
+    return {
+      code: "atl_not_runnable",
+      message: `The atl on PATH (${cli.path}) did not answer \`atl --version\`: agents using the skill cannot run it`,
+      hint: "The launcher needs Node.js and Bun >= 1.4.4 on PATH (`env: node: No such file or directory` = Node.js missing). Run the `next` command to see the error.",
+      next: [[cli.path, "--version"]],
+    };
+  }
+  if (cli.version !== expected) {
     return {
       code: "atl_version_mismatch",
       message: `The atl on PATH (${cli.path}) is ${cli.version}, this skill bundle is ${expected}`,
