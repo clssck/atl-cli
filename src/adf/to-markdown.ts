@@ -202,9 +202,9 @@ function macroKey(node: AdfNode): string {
   return key.replaceAll(/-{2,}/g, "-").replaceAll(/\s+/g, " ");
 }
 
-/** Macro parameters that carry no content: ids, schema/output plumbing, layout and style noise, anything secret-like. */
+/** Macro parameters that carry no content: ids, schema/output plumbing, layout and style noise, anything secret-like. `_parentId` is editor plumbing Confluence drops or rewrites on save. */
 const MACRO_PARAM_SKIP =
-  /^(?:macroid|__bodycontent|schemaversion|atlassian-macro-output-type)$|colou?r|style|width|height|border|align|icon|padding|margin|theme|layout|token|secret|passw(?:or)?d|api[-_]?key|credential|^auth(?!or)|[-_]auth(?!or)/i;
+  /^(?:macroid|_parentid|__bodycontent|schemaversion|atlassian-macro-output-type)$|colou?r|style|width|height|border|align|icon|padding|margin|theme|layout|token|secret|passw(?:or)?d|api[-_]?key|credential|^auth(?!or)|[-_]auth(?!or)/i;
 const MACRO_VALUE_MAX = 160;
 
 /**

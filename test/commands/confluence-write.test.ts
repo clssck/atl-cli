@@ -150,6 +150,10 @@ function ctx(overrides: Partial<CommandContext> = {}): CommandContext {
   return makeContext({ ATL_CONFIG_DIR: configDir, ATL_ACCESS_TOKEN: "test-token" }, overrides);
 }
 
+function planCtx(): CommandContext {
+  return ctx({ plan: true, argv: ["page", "update", "123456", "--file", "x.xhtml", "--plan"] });
+}
+
 function run(
   spec: CommandSpec,
   args: Record<string, string>,
@@ -329,6 +333,35 @@ describe("page.create", () => {
     });
   });
 
+  test("a body with script or data: URLs is refused before any request; --force sends it; --plan warns", async () => {
+    route("POST", "/api/v2/pages", CREATED_PAGE);
+    const unsafe = '<p>x</p><style>p{}</style><img src="data:image/png;base64,AAAA" />';
+    const flags = { space: "98765", title: "Raw", body: unsafe, bodyFormat: "storage" };
+    const error = await errorOf(run(pageCreate, {}, flags));
+    expect(error.code).toBe("body_hygiene");
+    expect(error.hint).toContain("<style>");
+    expect(error.hint).toContain("data: URL in src");
+    expect(calls).toHaveLength(0);
+    const planned = await withDiagnostics(() =>
+      run(
+        pageCreate,
+        {},
+        flags,
+        ctx({ plan: true, argv: ["page", "create", "--space", "98765", "--plan"] }),
+      ),
+    );
+    expect(planned.diagnostics).toContainEqual({
+      type: "warning",
+      code: "body_hygiene",
+      message: expect.stringContaining("<style>"),
+      hint: "Running this create needs --force",
+    });
+    expect(sent("POST")).toHaveLength(0);
+    const forced = await withDiagnostics(() => run(pageCreate, {}, { ...flags, force: true }));
+    expect(forced.diagnostics).toEqual([expect.objectContaining({ code: "body_hygiene" })]);
+    expect(sent("POST")).toHaveLength(1);
+  });
+
   test("--plan sends nothing and the plan's next is the argv without --plan", async () => {
     const argv = ["page", "create", "--space", "98765", "--title", "T", "--file", "x.md", "--plan"];
     const plan = asRecord(
@@ -490,6 +523,43 @@ describe("page.update", () => {
       next: [["atl", "page", "get", "123456"]],
     });
     expect(asRecord(result).type).toBeUndefined();
+  });
+
+  test("--expect-version mismatch fails with version_conflict before any write", async () => {
+    route("GET", "/api/v2/pages/123456", CURRENT);
+    const error = await errorOf(
+      run(pageUpdate, { page: "123456" }, { file: bodyFile(), expectVersion: 3 }),
+    );
+    expect(error.code).toBe("version_conflict");
+    expect(error.category).toBe("transient");
+    expect(error.message).toContain("version 4");
+    expect(error.message).toContain("expected 3");
+    expect(error.next).toEqual([["atl", "page", "get", "123456", "--format", "storage"]]);
+    expect(sent("PUT")).toHaveLength(0);
+  });
+
+  test("--expect-version match writes version n+1", async () => {
+    route("GET", "/api/v2/pages/123456", CURRENT);
+    route("PUT", "/api/v2/pages/123456", UPDATED);
+    await run(pageUpdate, { page: "123456" }, { file: bodyFile(), expectVersion: 4 });
+    expect(asRecord(asRecord(onlyWrite("PUT").body).version).number).toBe(5);
+  });
+
+  test("--expect-version mismatch still fails under --plan", async () => {
+    route("GET", "/api/v2/pages/123456", CURRENT);
+    const error = await errorOf(
+      run(
+        pageUpdate,
+        { page: "123456" },
+        { file: bodyFile(), expectVersion: 9 },
+        ctx({
+          plan: true,
+          argv: ["page", "update", "123456", "--file", "x.md", "--expect-version", "9", "--plan"],
+        }),
+      ),
+    );
+    expect(error.code).toBe("version_conflict");
+    expect(sent("PUT")).toHaveLength(0);
   });
 
   test("a title-only update re-sends the current ADF body", async () => {
@@ -700,6 +770,185 @@ describe("page.update", () => {
       );
       expect(error.message).toContain("excerpt-include");
       expect(error.message).not.toContain("jira,");
+    });
+  });
+
+  describe("with a storage body", () => {
+    // Shapes copied from a live storage read (page 4161586): macros with ids, a mention, a date, a heading.
+    const STORAGE =
+      '<h2>Rich ADF</h2><ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="67da668e-defb-4574-8fed-5a4522a98607"><ac:parameter ac:name="containerLevel">panel_c1</ac:parameter><ac:rich-text-body><p>Panel body <strong>bold</strong></p></ac:rich-text-body></ac:structured-macro><p>Mention <ac:link><ri:user ri:account-id="62a219658783e7006f627f3b" /></ac:link> date <time datetime="2026-11-16" /> card <a href="https://acme.atlassian.net/browse/KAN-7" data-card-appearance="inline">https://acme.atlassian.net/browse/KAN-7</a></p><ac:structured-macro ac:name="toc" ac:schema-version="1" ac:macro-id="b7201282-28bb-40c2-945b-da16c75a4c6c" /><p>end</p>';
+    const STORAGE_PAGE = {
+      ...CURRENT,
+      body: {
+        atlas_doc_format: { value: adf("Old body") },
+        storage: { value: STORAGE },
+      },
+    };
+    const WITHOUT_TOC_AND_HEADING = STORAGE.replace("<h2>Rich ADF</h2>", "").replace(
+      /<ac:structured-macro ac:name="toc"[^>]*\/>/,
+      "",
+    );
+    test("--plan reports what the new body removes and adds, with both byte sizes", async () => {
+      route("GET", "/api/v2/pages/123456", STORAGE_PAGE);
+      const { result, diagnostics } = await withDiagnostics(() =>
+        run(
+          pageUpdate,
+          { page: "123456" },
+          { body: `${WITHOUT_TOC_AND_HEADING}<h3>New</h3>`, bodyFormat: "storage" },
+          planCtx(),
+        ),
+      );
+      expect(asRecord(result).check).toEqual({
+        bytes: {
+          current: Buffer.byteLength(STORAGE),
+          new: Buffer.byteLength(`${WITHOUT_TOC_AND_HEADING}<h3>New</h3>`),
+        },
+        removed: { macros: { toc: 1 }, headings: { "h2 Rich ADF": 1 } },
+        added: { headings: { "h3 New": 1 } },
+      });
+      expect(sent("PUT")).toHaveLength(0);
+      expect(calls.map((call) => [call.method, call.url.searchParams.get("body-format")])).toEqual([
+        ["GET", "atlas_doc_format"],
+        ["GET", "storage"],
+      ]);
+      expect(diagnostics).toEqual([
+        {
+          type: "warning",
+          code: "content_removed",
+          message: "The new body removes macros: toc; headings: h2 Rich ADF",
+        },
+      ]);
+    });
+
+    test("a real run warns once and still saves; the result carries no check", async () => {
+      route("GET", "/api/v2/pages/123456", STORAGE_PAGE);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      const { result, diagnostics } = await withDiagnostics(() =>
+        run(
+          pageUpdate,
+          { page: "123456" },
+          { body: WITHOUT_TOC_AND_HEADING, bodyFormat: "storage" },
+        ),
+      );
+      expect(sent("PUT")).toHaveLength(1);
+      expect(asRecord(result).check).toBeUndefined();
+      expect(diagnostics).toEqual([expect.objectContaining({ code: "content_removed" })]);
+    });
+
+    test("fresh macro ids, local ids and version-at-save do not count as changes", async () => {
+      route("GET", "/api/v2/pages/123456", STORAGE_PAGE);
+      const rewritten = STORAGE.replaceAll(/ac:macro-id="[^"]+"/g, 'ac:macro-id="fresh"').replace(
+        "<p>end</p>",
+        '<p ac:local-id="x">end</p><ac:link><ri:page ri:content-title="Vendor" ri:version-at-save="3" /></ac:link>',
+      );
+      const { result, diagnostics } = await withDiagnostics(() =>
+        run(pageUpdate, { page: "123456" }, { body: rewritten, bodyFormat: "storage" }, planCtx()),
+      );
+      expect(asRecord(asRecord(result).check).removed).toEqual({});
+      expect(asRecord(asRecord(result).check).added).toEqual({ pageLinks: { Vendor: 1 } });
+      expect(diagnostics).toEqual([]);
+    });
+
+    test("markdown, ADF and title-only updates never fetch the storage body", async () => {
+      route("GET", "/api/v2/pages/123456", STORAGE_PAGE);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      await run(pageUpdate, { page: "123456" }, { title: "T" });
+      await run(pageUpdate, { page: "123456" }, { body: adf("x"), bodyFormat: "adf", force: true });
+      expect(
+        calls.filter((call) => call.url.searchParams.get("body-format") === "storage"),
+      ).toHaveLength(0);
+    });
+  });
+
+  describe("body hygiene", () => {
+    const UNSAFE =
+      '<p>x</p><script>alert(1)</script><a href="data:text/html;base64,PHA+">d</a><ac:image><ri:url ri:value="file:///etc/passwd" /></ac:image>';
+
+    test("a storage body with script and data:/file: URLs is refused and names each finding", async () => {
+      route("GET", "/api/v2/pages/123456", CURRENT);
+      const error = await errorOf(
+        run(pageUpdate, { page: "123456" }, { body: UNSAFE, bodyFormat: "storage" }),
+      );
+      expect(error.code).toBe("body_hygiene");
+      expect(error.category).toBe("input");
+      for (const finding of ["<script>", "data: URL in href", "file: URL in ri:url"]) {
+        expect(error.hint).toContain(finding);
+      }
+      expect(error.hint).toContain("--force");
+      expect(calls).toHaveLength(0);
+    });
+
+    test("--force saves and warns; --plan warns with a --force hint and sends nothing", async () => {
+      route("GET", "/api/v2/pages/123456", CURRENT);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      const forced = await withDiagnostics(() =>
+        run(pageUpdate, { page: "123456" }, { body: UNSAFE, bodyFormat: "storage", force: true }),
+      );
+      expect(sent("PUT")).toHaveLength(1);
+      expect(forced.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "body_hygiene",
+          message: expect.stringContaining("<script>"),
+        }),
+      ]);
+      const planned = await withDiagnostics(() =>
+        run(pageUpdate, { page: "123456" }, { body: UNSAFE, bodyFormat: "storage" }, planCtx()),
+      );
+      expect(sent("PUT")).toHaveLength(1);
+      expect(planned.diagnostics).toContainEqual({
+        type: "warning",
+        code: "body_hygiene",
+        message: expect.stringContaining("<script>"),
+        hint: "Running this update needs --force",
+      });
+    });
+
+    test("ADF link marks and media/card urls are checked; markdown is not", async () => {
+      route("GET", "/api/v2/pages/123456", CURRENT);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      const linked = JSON.stringify({
+        type: "doc",
+        version: 1,
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "x",
+                marks: [{ type: "link", attrs: { href: " Da\nta:text/html,hi" } }],
+              },
+              { type: "inlineCard", attrs: { url: "file:///etc/hosts" } },
+            ],
+          },
+        ],
+      });
+      const error = await errorOf(
+        run(pageUpdate, { page: "123456" }, { body: linked, bodyFormat: "adf" }),
+      );
+      expect(error.code).toBe("body_hygiene");
+      expect(error.hint).toContain("data: URL in link href");
+      expect(error.hint).toContain("file: URL in inlineCard url");
+      await run(
+        pageUpdate,
+        { page: "123456" },
+        { body: "<script>alert(1)</script> [x](data:text/html,hi)" },
+      );
+      expect(sent("PUT")).toHaveLength(1);
+    });
+
+    test("script text inside a CDATA code macro and escaped markup are not findings", async () => {
+      route("GET", "/api/v2/pages/123456", CURRENT);
+      route("PUT", "/api/v2/pages/123456", UPDATED);
+      await run(
+        pageUpdate,
+        { page: "123456" },
+        {
+          body: '<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[<script>x</script>]]></ac:plain-text-body></ac:structured-macro><p>&lt;style&gt; and <a href="https://e.com/data:x">ok</a></p>',
+          bodyFormat: "storage",
+        },
+      );
+      expect(sent("PUT")).toHaveLength(1);
     });
   });
 

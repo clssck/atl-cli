@@ -1,5 +1,13 @@
 import { Type } from "../core/schema.ts";
 import { parseAdfBody, type AdfDoc, type AdfNode } from "../adf/index.ts";
+import {
+  adfHygiene,
+  describeInventory,
+  inventoryDelta,
+  storageHygiene,
+  storageInventory,
+  type Inventory,
+} from "../adf/storage-check.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
 import { AtlError, inputError, type NextCommand } from "../core/errors.ts";
 import type { Session } from "../core/session.ts";
@@ -257,6 +265,40 @@ function droppedMacros(
   return missing;
 }
 
+/**
+ * Refuse (or, under --plan, warn about) content that is rarely intended: script/style elements and
+ * `data:`/`file:` URLs. Markdown bodies are skipped: raw HTML in markdown stays literal text.
+ */
+function enforceHygiene(
+  ctx: CommandContext,
+  body: LoadedBody | undefined,
+  force: boolean | undefined,
+  verb: "create" | "update",
+): void {
+  if (body === undefined || (body.kind === "adf" && body.markdown === true)) {
+    return;
+  }
+  const findings = body.kind === "storage" ? storageHygiene(body.value) : adfHygiene(body.doc);
+  if (findings.length === 0) {
+    return;
+  }
+  const list = findings.join(", ");
+  const message = `The new body contains ${list}`;
+  if (force !== true && !ctx.plan) {
+    throw inputError(
+      "body_hygiene",
+      message,
+      `Remove ${list} from the body, or pass --force to save anyway.`,
+    );
+  }
+  writeDiagnostic({
+    type: "warning",
+    code: "body_hygiene",
+    message,
+    ...(ctx.plan ? { hint: `Running this ${verb} needs --force` } : {}),
+  });
+}
+
 const CONTAINER_TYPE_FLAG = Type.Optional(
   Type.Union([Type.Literal("page"), Type.Literal("blogpost")], {
     description: "Create or update a page (default) or a blog post",
@@ -286,6 +328,12 @@ const PageCreateFlags = Type.Object({
   status: STATUS_FLAG,
   private: Type.Optional(Type.Boolean({ description: "Restrict the new content to yourself" })),
   subtype: Type.Optional(Type.Literal("live", { description: "Create a live doc (pages only)" })),
+  force: Type.Optional(
+    Type.Boolean({
+      description:
+        "Save anyway when the body fails the hygiene check (script, style, data:/file: URLs)",
+    }),
+  ),
   type: CONTAINER_TYPE_FLAG,
 });
 
@@ -313,6 +361,7 @@ export const pageCreate = defineCommand({
     }
     const parent = flags.parent === undefined ? undefined : contentTarget(flags.parent, "page");
     const body = await requireBody(flags, { allowStorage: true });
+    enforceHygiene(ctx, body, flags.force, "create");
     const session = await openConfluence(ctx, parent?.site ?? spaceSiteHint(flags.space));
     const spaceId = await resolveSpaceId(session, flags.space);
     const created = await sendWrite<ApiPage>(ctx, session, {
@@ -351,7 +400,15 @@ const PageUpdateFlags = Type.Object({
   message: Type.Optional(Type.String({ description: "Version message" })),
   force: Type.Optional(
     Type.Boolean({
-      description: "Save a body that drops inline-comment anchors present in the current version",
+      description:
+        "Save anyway when the body drops inline-comment anchors or macros, or fails the hygiene check (script, style, data:/file: URLs)",
+    }),
+  ),
+  expectVersion: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Fail with version_conflict unless the page is still at this version (the one the edited body was read at)",
     }),
   ),
   type: CONTAINER_TYPE_FLAG,
@@ -367,6 +424,7 @@ export const pageUpdate = defineCommand({
   examples: [
     "atl page update 123456 --file runbook.md --message 'Fix rollback steps'",
     "atl page update 123456 --body 'Moved to the new runbook' --message 'Redirect'",
+    "atl page update 123456 --file edited.storage.html --expect-version 7",
     "atl page update 123456 --parent 777 --plan",
   ],
   async run(ctx, input) {
@@ -389,6 +447,7 @@ export const pageUpdate = defineCommand({
     }
     const parent = flags.parent === undefined ? undefined : contentTarget(flags.parent, "page");
     const loaded = await loadBody(flags, { allowStorage: true });
+    enforceHygiene(ctx, loaded, flags.force, "update");
     const session = await openConfluence(
       ctx,
       requested.site ??
@@ -405,6 +464,29 @@ export const pageUpdate = defineCommand({
       }),
     );
     requirePagesForParent(target.base, "--parent", flags.parent);
+    const reread = [
+      "atl",
+      "page",
+      "get",
+      target.id,
+      ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
+    ];
+    // Compared against the version the GET reports, drafts included: a draft save resets the
+    // stored number to 1, so on drafts this only catches edits that changed that number.
+    if (flags.expectVersion !== undefined) {
+      const actual = currentVersion(current, `Page ${target.id}`);
+      if (actual !== flags.expectVersion) {
+        throw new AtlError(
+          `Page ${target.id} is at version ${actual}, expected ${flags.expectVersion}: it changed since it was read`,
+          {
+            code: "version_conflict",
+            category: "transient",
+            hint: "Re-read the page, re-apply the edit to the current body, and retry with --expect-version set to the new version.",
+            next: [[...reread, "--format", "storage"]],
+          },
+        );
+      }
+    }
     const url = session.confluenceUrl(`/api/v2/${target.base}/${encodeURIComponent(target.id)}`);
     const title = flags.title ?? current.title;
     if (title === undefined) {
@@ -447,6 +529,33 @@ export const pageUpdate = defineCommand({
         ...(ctx.plan ? { hint: "Running this update needs --force" } : {}),
       });
     }
+    let check:
+      | { bytes: { current: number; new: number }; removed: Inventory; added: Inventory }
+      | undefined;
+    if (loaded?.kind === "storage") {
+      const stored = await session.http.request<ApiPage>({
+        method: "GET",
+        url,
+        query: { "body-format": "storage" },
+      });
+      const currentStorage = stored.body?.storage?.value ?? "";
+      const { removed, added } = inventoryDelta(
+        storageInventory(currentStorage),
+        storageInventory(loaded.value),
+      );
+      if (Object.keys(removed).length > 0) {
+        writeDiagnostic({
+          type: "warning",
+          code: "content_removed",
+          message: `The new body removes ${describeInventory(removed)}`,
+        });
+      }
+      check = {
+        bytes: { current: Buffer.byteLength(currentStorage), new: Buffer.byteLength(loaded.value) },
+        removed,
+        added,
+      };
+    }
     // Omitted --status keeps the current one. v2 wants version 1 when saving a draft and when
     // publishing a never-published draft (its first current version); otherwise current + 1.
     const status = flags.status ?? (current.status === "draft" ? "draft" : "current");
@@ -476,21 +585,14 @@ export const pageUpdate = defineCommand({
           },
         },
       },
-      {
-        reread: [
-          "atl",
-          "page",
-          "get",
-          target.id,
-          ...(target.base === "blogposts" ? ["--type", "blogpost"] : []),
-        ],
-      },
+      { reread },
     );
     if (isPlan(updated)) {
       return {
         ...updated,
         ...(dropped.length > 0 ? { droppedInlineComments: dropped } : {}),
         ...(droppedMacroKeys.length > 0 ? { droppedMacros: droppedMacroKeys } : {}),
+        ...(check === undefined ? {} : { check }),
       };
     }
     return {
