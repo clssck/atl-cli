@@ -73,7 +73,7 @@ Method, scenarios and scripts: [eval/README.md](eval/README.md).
 
 ## Install
 
-Needs [Bun](https://bun.sh) >= 1.4.4 on PATH (the `atl` launcher re-executes under Bun with `.env` autoloading disabled).
+Needs [Bun](https://bun.sh) >= 1.4.4 and [Node.js](https://nodejs.org) on PATH: the `atl` bin is a Node launcher (`#!/usr/bin/env node`) that re-executes the CLI under Bun with `.env` autoloading disabled. Without Node.js, running `atl` fails with `env: node: No such file or directory`.
 
 ```bash
 bun add -g @clssck/atl-cli        # puts `atl` on PATH (~/.bun/bin); or: npm i -g @clssck/atl-cli
