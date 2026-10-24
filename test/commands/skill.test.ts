@@ -253,6 +253,17 @@ describe("skill status", () => {
     const same = { which: () => "/opt/atl", version: () => Promise.resolve("1.0.0") };
     const ok = await withDiagnostics(() => runStatus(ctx, input(), { ...V1, cli: same }));
     expect(ok.diagnostics).toEqual([]);
+
+    // Found on PATH but `atl --version` cannot run (e.g. `env: node` exit 127): a real spawn failure.
+    const broken = { which: () => join(sb.root, "missing-bin", "atl") };
+    const dead = await withDiagnostics(() => runStatus(ctx, input(), { ...V1, cli: broken }));
+    expect(dead.result).toMatchObject({ cli: { path: join(sb.root, "missing-bin", "atl") } });
+    expect(dead.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "atl_not_runnable",
+        next: [[join(sb.root, "missing-bin", "atl"), "--version"]],
+      }),
+    );
   });
 });
 

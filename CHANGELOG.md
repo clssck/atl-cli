@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `atl skill status | install | update` and `atl doctor` warn `atl_not_runnable` when an `atl` is on PATH but `atl --version` fails (for example Node.js missing), instead of reporting it as healthy; `next` reruns `--version` to show the error.
+
 ## [0.1.1] - 2026-10-24
 
 - Install docs, the skill's Setup table and the `atl_not_on_path` hint name Node.js as a requirement next to Bun: the `atl` bin is a Node launcher, so a Bun-only machine failed with `env: node: No such file or directory` and no guidance.
