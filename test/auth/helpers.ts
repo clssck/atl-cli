@@ -17,7 +17,8 @@ export async function createSandbox(): Promise<Sandbox> {
   return {
     dir,
     configDir,
-    env: { ATL_CONFIG_DIR: configDir },
+    // HOME too: `doctor` inspects agent skill dirs under the home, which must never be the real one.
+    env: { ATL_CONFIG_DIR: configDir, HOME: join(dir, "home"), USERPROFILE: join(dir, "home") },
     cleanup: () => rm(dir, { recursive: true, force: true }),
   };
 }
