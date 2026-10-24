@@ -23,12 +23,15 @@ import {
 import { configDir } from "../core/paths.ts";
 import { createHttpClient, openSession, refreshSites } from "../core/session.ts";
 import { parseSite } from "../resolve/index.ts";
+import { cliOnPath, cliProblem, type CliProbe } from "../skill/cli-path.ts";
+import { HOST_TARGETS, hostLocation, inspectSkill, type SkillState } from "../skill/store.ts";
 import { VERSION } from "../version.ts";
 
 /** Injection points for tests; production uses the global fetch and the filesystem. */
 export interface SiteDeps {
   fetch?: FetchLike;
   readFile?: (path: string) => Promise<string>;
+  cli?: CliProbe;
 }
 
 const LOGIN: NextCommand = ["atl", "auth", "login"];
@@ -114,6 +117,24 @@ export async function runDoctor(ctx: CommandContext, deps: SiteDeps = {}): Promi
     missing.push({ step: "Re-authenticate: a probe was rejected", next: LOGIN });
   }
 
+  // Offline and informational: only installed copies are listed; it never changes `ok`.
+  const skill: Partial<Record<(typeof HOST_TARGETS)[number], SkillState>> = {};
+  for (const target of HOST_TARGETS) {
+    const { state } = await inspectSkill(hostLocation(ctx.env, target).path);
+    if (state !== "missing") {
+      skill[target] = state;
+    }
+  }
+  if (Object.values(skill).includes("outdated")) {
+    missing.push({ step: "Update the installed atl skill", next: ["atl", "skill", "update"] });
+  }
+  // Agents run `atl` from PATH, which may not be this process (`bunx`, a second install).
+  const cli = await cliOnPath(ctx.env, deps.cli);
+  const cliIssue = cliProblem(cli);
+  if (cliIssue !== undefined) {
+    missing.push({ step: `${cliIssue.message}. ${cliIssue.hint}`, next: cliIssue.next[0] ?? [] });
+  }
+
   const probes = { authServer, me, confluence, jira };
   if (ctx.full) {
     return {
@@ -132,6 +153,8 @@ export async function runDoctor(ctx: CommandContext, deps: SiteDeps = {}): Promi
       },
       site,
       probes,
+      skill,
+      cli,
       missing,
     };
   }
@@ -158,6 +181,8 @@ export async function runDoctor(ctx: CommandContext, deps: SiteDeps = {}): Promi
         : { expiresInSeconds: status.expiresInSeconds }),
     },
     site,
+    skill,
+    ...(cli.path === undefined ? {} : { cli }),
     ...(Object.keys(failed).length === 0 ? {} : { probes: failed }),
     ...(missing.length === 0 ? {} : { missing }),
   };

@@ -13,6 +13,7 @@ import { mcpCommands, mcpGroups } from "./mcp.ts";
 import { metaCommands, metaGroups } from "./meta.ts";
 import { miscCommands } from "./misc.ts";
 import { searchCommands, searchGroups } from "./search.ts";
+import { skillCommands, skillGroups } from "./skill.ts";
 import { siteCommands } from "./site.ts";
 /** Every command module registers here; `src/main.ts` and the parity test import this file. */
 registerCommands([
@@ -30,6 +31,7 @@ registerCommands([
   ...graphCommands,
   ...mcpCommands,
   ...miscCommands,
+  ...skillCommands,
   ...metaCommands,
 ]);
 registry.describeGroups({
@@ -42,5 +44,6 @@ registry.describeGroups({
   ...compassGroups,
   ...graphGroups,
   ...mcpGroups,
+  ...skillGroups,
   ...metaGroups,
 });

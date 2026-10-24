@@ -104,6 +104,34 @@ try {
     }
   }
 
+  // The installed CLI embeds the skill: installing it must reproduce the packaged directory.
+  const skillsRoot = path.join(tempRoot, "skills root");
+  const packagedSkill = path.join(installed, "skills", "atl");
+  const skillArgs = ["--no-env-file", cli, "skill"];
+  run(process.execPath, [...skillArgs, "install", "--dir", skillsRoot], { cwd: installDir });
+  const installedSkill = path.join(skillsRoot, "atl");
+  const packagedFiles = fs
+    .readdirSync(packagedSkill, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(packagedSkill, path.join(entry.parentPath, entry.name)));
+  assert(packagedFiles.includes("SKILL.md"), "packaged skill has no SKILL.md");
+  for (const relativePath of packagedFiles) {
+    assert(
+      Bun.deepEquals(
+        await Bun.file(path.join(installedSkill, relativePath)).bytes(),
+        await Bun.file(path.join(packagedSkill, relativePath)).bytes(),
+      ),
+      `installed skill file differs from the packaged one: ${relativePath}`,
+    );
+  }
+  const skillStatus: { targets?: { state?: unknown }[] } = JSON.parse(
+    run(process.execPath, [...skillArgs, "status", "--dir", skillsRoot], { cwd: installDir }),
+  );
+  assert(
+    skillStatus.targets?.length === 1 && skillStatus.targets[0]?.state === "current",
+    "installed skill is not current",
+  );
+
   const failure = Bun.spawnSync([process.execPath, "--no-env-file", cli, "not-a-command"], {
     cwd: installDir,
     env: smokeEnv,

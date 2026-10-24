@@ -1,0 +1,32 @@
+<p><strong>Status:</strong> <ac:structured-macro ac:name="status"><ac:parameter ac:name="title">Runbook</ac:parameter><ac:parameter ac:name="colour">Purple</ac:parameter></ac:structured-macro> | <strong>Owner:</strong> REPLACE-TEAM | <strong>Reviewed:</strong> <time datetime="YYYY-MM-DD" /> | <strong>Audience:</strong> Operators</p>
+<ac:structured-macro ac:name="warning"><ac:parameter ac:name="title">Use with care</ac:parameter><ac:rich-text-body><p>REPLACE-RISK: approval needed, blast radius, safety boundary. Read Rollback before starting.</p></ac:rich-text-body></ac:structured-macro>
+<h2>Purpose</h2>
+<p>REPLACE-SITUATION this runbook handles and the expected end state.</p>
+<h2>Prerequisites</h2>
+<table data-layout="default"><tbody>
+<tr><th><p>Requirement</p></th><th><p>Status</p></th><th><p>How to verify</p></th></tr>
+<tr><td><p>Access confirmed</p></td><td><p><ac:structured-macro ac:name="status"><ac:parameter ac:name="title">Check</ac:parameter><ac:parameter ac:name="colour">Yellow</ac:parameter></ac:structured-macro></p></td><td><p>REPLACE-SYSTEM, role or approval evidence.</p></td></tr>
+<tr><td><p>Rollback path known</p></td><td><p><ac:structured-macro ac:name="status"><ac:parameter ac:name="title">Ready</ac:parameter><ac:parameter ac:name="colour">Blue</ac:parameter></ac:structured-macro></p></td><td><p>Rollback section read.</p></td></tr>
+</tbody></table>
+<h2>Procedure</h2>
+<ol>
+<li><p>Announce the operation and confirm the current owner.</p></li>
+<li><p>Capture the current state (REPLACE-COMMAND or dashboard).</p></li>
+<li><p>Perform the smallest safe action toward the target state.</p></li>
+<li><p>Run the validation checks before continuing.</p></li>
+</ol>
+<h2>Validation</h2>
+<table data-layout="default"><tbody>
+<tr><th><p>Check</p></th><th><p>Expected result</p></th></tr>
+<tr><td><p>Health check</p></td><td><p>REPLACE-EXPECTED service state.</p></td></tr>
+<tr><td><p>Evidence captured</p></td><td><p>Logs, screenshots or query results linked.</p></td></tr>
+</tbody></table>
+<h2>Checklist</h2>
+<ac:task-list>
+<ac:task><ac:task-id>1</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Preconditions checked</ac:task-body></ac:task>
+<ac:task><ac:task-id>2</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Procedure completed</ac:task-body></ac:task>
+<ac:task><ac:task-id>3</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Validation passed, stakeholders notified</ac:task-body></ac:task>
+</ac:task-list>
+<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Rollback</ac:parameter><ac:rich-text-body><p>REPLACE-ROLLBACK: decision point, exact action, validation, escalation owner.</p></ac:rich-text-body></ac:structured-macro>
+<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Command reference</ac:parameter><ac:rich-text-body><ac:structured-macro ac:name="code"><ac:parameter ac:name="language">bash</ac:parameter><ac:plain-text-body><![CDATA[# read-only checks first
+REPLACE-COMMAND --check]]></ac:plain-text-body></ac:structured-macro></ac:rich-text-body></ac:structured-macro>

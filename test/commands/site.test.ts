@@ -11,6 +11,7 @@ import { AtlError } from "../../src/core/errors.ts";
 import type { ApiFlags, SitesFlags } from "../../src/commands/site.ts";
 import { runApi, runDoctor, runSites, runWhoami } from "../../src/commands/site.ts";
 import { DEFAULT_RESOURCE } from "../../src/auth/index.ts";
+import { VERSION } from "../../src/version.ts";
 import {
   createSandbox,
   fakeFetch,
@@ -127,7 +128,8 @@ describe("doctor", () => {
     const { fetch, calls } = fakeFetch(
       (call) => discoveryResponse(call) ?? jsonResponse({ results: [] }),
     );
-    const report = await runDoctor(context(loggedIn()), { fetch });
+    const cli = { which: () => "/usr/local/bin/atl", version: () => Promise.resolve(VERSION) };
+    const report = await runDoctor(context(loggedIn()), { fetch, cli });
     expect(asRecord(report).site).toEqual({ host: "acme.atlassian.net", cloudId: CLOUD_ID });
     expect(report).toMatchObject({ ok: true });
     expect(report).not.toHaveProperty("probes");
@@ -139,6 +141,24 @@ describe("doctor", () => {
     );
     expect(urls).toContain(
       `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/project/search?maxResults=1`,
+    );
+  });
+
+  test("names the fix when agents cannot run a matching atl from PATH", async () => {
+    const { fetch } = fakeFetch((call) => discoveryResponse(call) ?? jsonResponse({}, 404));
+    const absent = asRecord(
+      await runDoctor(context(sandbox.env), { fetch, cli: { which: () => null } }),
+    );
+    expect(absent).not.toHaveProperty("cli");
+    expect(absent.missing).toContainEqual(
+      expect.objectContaining({ next: ["bun", "add", "-g", "@clssck/atl-cli"] }),
+    );
+
+    const stale = { which: () => "/opt/atl", version: () => Promise.resolve("0.0.1-old") };
+    const old = asRecord(await runDoctor(context(sandbox.env), { fetch, cli: stale }));
+    expect(old.cli).toEqual({ path: "/opt/atl", version: "0.0.1-old" });
+    expect(old.missing).toContainEqual(
+      expect.objectContaining({ next: ["bun", "add", "-g", "@clssck/atl-cli@latest"] }),
     );
   });
 });
