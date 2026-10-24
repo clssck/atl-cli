@@ -18,7 +18,14 @@
 | `mcp/tools-v1.json` | captured MCP v1 tool surface; the parity contract |
 | `mcp/upstream.json` | public MCP version signals watched by CI |
 | `scripts/mcp-watch.ts` | compares upstream signals with `mcp/upstream.json` |
-| `skills/atl/SKILL.md` | companion agent skill; update it with any command, flag or output-shape change agents rely on |
+| `skills/atl/` | companion agent skill (`SKILL.md`, `references/`, `assets/`); update it with any command, flag or output-shape change agents rely on. Every file under it is embedded in the bundle and compiled binaries (no list to maintain) |
+| `src/commands/skill.ts` | `atl skill status \| install \| update \| uninstall`; refusal rules (`decide`), `--plan`, `--force` |
+| `src/skill/embed.ts` | Bun macro that reads `skills/atl/` at bundle time; only `src/skill/bundle.ts` imports it (`with { type: "macro" }`) |
+| `src/skill/bundle.ts` | `BUNDLED_SKILL`: the embedded `skills/atl/` files |
+| `src/skill/store.ts` | skill targets (omp, claude, agents, dir), manifest/state detection, atomic replace; also read by `atl doctor` |
+| `src/skill/cli-path.ts` | the `atl` agents run from PATH (`cliOnPath`) and the `atl_not_on_path` / `atl_version_mismatch` fix (`cliProblem`); used by `atl skill` and `atl doctor` |
+| `src/skill/ignored.ts` | OS junk file names (`.DS_Store`, `Thumbs.db`, `desktop.ini`) skipped by the bundle and installed-copy walks |
+| `src/adf/storage-check.ts` | storage-body inventory (`storageInventory`, `inventoryDelta`) and hygiene findings (`storageHygiene`, `adfHygiene`) for `page update \| create` and `page diff` |
 | `eval/` | token/agent eval against seeded trial-site data (`eval/README.md`); outputs in gitignored `eval/.out/` |
 
 ## Commands

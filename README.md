@@ -22,38 +22,38 @@ A later run of the two atl arms (tag `r5`, all 47 questions × 3) added these ch
 
 **Corporate-nightmare set, n01-n33** (99 runs per arm, writes included):
 
-| | atl | atl-pre | mcp |
-|---|---|---|---|
-| correct | 99/99 | 99/99 | 98/99 |
-| tool calls | 3.32 | 2.31 | 3.99 |
-| tool-result tokens | 2,052 | 983 | 8,489 |
-| total tokens | 80k | 62k | 128k |
-| cost | $0.057 | $0.048 | $0.144 |
-| wall time | 19.8 s | 17.2 s | 25.6 s |
+|                    | atl    | atl-pre | mcp    |
+| ------------------ | ------ | ------- | ------ |
+| correct            | 99/99  | 99/99   | 98/99  |
+| tool calls         | 3.32   | 2.31    | 3.99   |
+| tool-result tokens | 2,052  | 983     | 8,489  |
+| total tokens       | 80k    | 62k     | 128k   |
+| cost               | $0.057 | $0.048  | $0.144 |
+| wall time          | 19.8 s | 17.2 s  | 25.6 s |
 
 The MCP miss is a page-properties question: it has no tool that reads content properties. In the previous run of this set, atl was 99/99, atl-pre 99/99 and mcp 93/99, at $0.068, $0.063 and $0.155 per question.
 
 **Strict set, n34-n42** (reads, 24 runs per arm; only the `ANSWER` lines the prompt asks for are judged):
 
-| | atl | atl-pre | mcp |
-|---|---|---|---|
-| correct | 24/24 | 24/24 | 23/24 |
-| tool calls | 3.25 | 2.29 | 9.17 |
-| tool-result tokens | 3,871 | 3,102 | 10,027 |
-| total tokens | 84k | 68k | 389k |
-| cost | $0.066 | $0.058 | $0.272 |
-| wall time | 18.5 s | 16.5 s | 72.2 s |
+|                    | atl    | atl-pre | mcp    |
+| ------------------ | ------ | ------- | ------ |
+| correct            | 24/24  | 24/24   | 23/24  |
+| tool calls         | 3.25   | 2.29    | 9.17   |
+| tool-result tokens | 3,871  | 3,102   | 10,027 |
+| total tokens       | 84k    | 68k     | 389k   |
+| cost               | $0.066 | $0.058  | $0.272 |
+| wall time          | 18.5 s | 16.5 s  | 72.2 s |
 
 **Abyss set, n43-n47** (15 runs per arm): answers that a default first page or an embedded field hides. These are the last of 240 comments; worklogs beyond the 20 an issue embeds; a write to 27 issues spread over two search pages; 130 child pages; and a four-hop chain from a page through Jira to a remote link.
 
-| | atl | atl-pre | mcp |
-|---|---|---|---|
-| correct | 15/15 | 15/15 | 12/15 |
-| tool calls | 5.13 | 4.27 | 8.27 |
-| tool-result tokens | 7,203 | 4,257 | 12,203 |
-| total tokens | 131k | 108k | 294k |
-| cost | $0.102 | $0.078 | $0.233 |
-| wall time | 27.8 s | 25.0 s | 122.5 s |
+|                    | atl    | atl-pre | mcp     |
+| ------------------ | ------ | ------- | ------- |
+| correct            | 15/15  | 15/15   | 12/15   |
+| tool calls         | 5.13   | 4.27    | 8.27    |
+| tool-result tokens | 7,203  | 4,257   | 12,203  |
+| total tokens       | 131k   | 108k    | 294k    |
+| cost               | $0.102 | $0.078  | $0.233  |
+| wall time          | 27.8 s | 25.0 s  | 122.5 s |
 
 MCP's abyss misses:
 
@@ -71,22 +71,27 @@ Caveats:
 
 Method, scenarios and scripts: [eval/README.md](eval/README.md).
 
-## Install and build
+## Install
 
-Install from npm; Bun >= 1.4.4 must be on PATH at runtime (the `atl` launcher re-executes under Bun with `.env` autoloading disabled):
+Needs [Bun](https://bun.sh) >= 1.4.4 on PATH (the `atl` launcher re-executes under Bun with `.env` autoloading disabled).
 
 ```bash
-bun add -g @clssck/atl-cli        # or: npm i -g @clssck/atl-cli
-atl --help
+bun add -g @clssck/atl-cli        # puts `atl` on PATH (~/.bun/bin); or: npm i -g @clssck/atl-cli
+atl skill install                 # teaches your agents: omp, Claude Code, Codex (~/.agents)
 atl auth login                    # opens the browser; approve, then return
-atl doctor
+atl doctor                        # ok: true = ready; otherwise run each `missing[].next`
 ```
+
+Upgrade: `bun add -g @clssck/atl-cli@latest && atl skill update`. `atl skill status` and `atl doctor` report a missing or mismatched `atl` on PATH (`atl_not_on_path`, `atl_version_mismatch`) with the command that fixes it, so an agent can set itself up from those.
+
+Setting up through an agent: ask it to "install the atl CLI and its skill". Every step above is a plain command except `atl auth login`, which needs you to approve in the browser.
 
 From source:
 
 ```bash
 bun install
-bun src/main.ts --help
+bun link                          # `atl` on PATH runs this checkout's src/ directly (no rebuild needed)
+atl skill install
 bun run build                     # dist/atl.js: Bun-targeted bundle, run via bin/atl.js
 bun run compile                   # dist/atl: single native binary (--compile --minify --bytecode)
 bun run compile:linux             # dist/atl-linux
@@ -132,7 +137,7 @@ user find "<name>" | get <accountId...>
 
 page get [--version N] [--format md|adf|storage|view] [--grep <regex> [--context N]] | diff | ancestors | tree [--depth 1-5] | children | versions | labels
 page operations | properties | property set | restriction | permissions list
-page create | update [--force] | move | copy | restore --version N
+page create [--force] | update [--force] | move | copy | restore --version N
 page restrict | property delete | permissions add | remove | set    (restrict/property delete/remove/set need --yes)
 space list | get | personal | pages
 attachment list | get                          (Confluence metadata)
@@ -151,7 +156,35 @@ agent contract
 
 ### Agent skill
 
-[skills/atl/SKILL.md](skills/atl/SKILL.md) is a compact command table for agents (about 1.9 KB): search, issue, board, page and write commands with the flags agents would otherwise look up through `--help`, plus a few output and error rules. For omp, link it into a skills root, e.g. `ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`, with the `atl` binary on `PATH`.
+[skills/atl/](skills/atl) is the companion agent skill: `SKILL.md` (command table, output and error rules) plus `references/` for research, editing and storage-format patterns. Every file in it is embedded in the CLI (`dist/atl.js` and compiled binaries), so `atl` installs the skill that matches its own version; no checkout is needed.
+
+```bash
+atl skill status                    # per target: missing | current | outdated | modified | unmanaged | linked | newer
+atl skill install                   # every agent home found on this machine; --target omp,claude,agents or --dir <skills-root>
+atl skill update                    # refresh installed copies to this CLI's bundle; missing ones are skipped
+atl skill uninstall --yes           # remove managed copies
+```
+
+| target   | skills root                                                                | agent home that `install` looks for |
+| -------- | -------------------------------------------------------------------------- | ----------------------------------- |
+| `omp`    | `$PI_CODING_AGENT_DIR` or `~/.omp/agent`, plus `/skills`                   | the same directory                  |
+| `claude` | `$CLAUDE_CONFIG_DIR` or `~/.claude`, plus `/skills`                        | the same directory                  |
+| `agents` | `~/.agents/skills` (Codex and other Agent Skills hosts; omp also reads it) | `~/.agents` or `~/.codex`           |
+| `dir`    | `--dir <skills-root>`                                                      | n/a: always installs                |
+
+The skill lands in `<root>/atl` with an `.atl-skill.json` manifest (`{name, version, files: {path: sha256}}`). `status` compares it with the files on disk and the CLI's bundle:
+
+| state       | meaning                                                                 | `install` / `update` | `uninstall`     |
+| ----------- | ----------------------------------------------------------------------- | -------------------- | --------------- |
+| `missing`   | no directory                                                            | install / skipped    | skipped         |
+| `current`   | manifest version equals the CLI's and the files match the bundle        | unchanged            | removes         |
+| `outdated`  | untouched copy from a different version or bundle                       | refreshes            | removes         |
+| `modified`  | files edited, added or removed since install                            | needs `--force`      | needs `--force` |
+| `unmanaged` | directory without a valid manifest                                      | needs `--force`      | refused         |
+| `newer`     | manifest version is greater than the CLI's (another `atl` installed it) | needs `--force`      | removes         |
+| `linked`    | the directory is a symlink (for example a checkout)                     | refused              | refused         |
+
+A refusal with an explicit `--target` or `--dir` is a `skill_conflict` input error (exit 1, nothing changed, `next` carries the `--force` command). Without them it is a `skipped` row with a `reason` and the other targets proceed. Replacement is atomic (new tree beside the old, two renames, then the old tree is deleted), so files an older bundle shipped disappear and a failed run never leaves a half-written install. `--plan` returns the same rows without touching disk, and `atl doctor` lists installed copies under `skill` and suggests `atl skill update` when one is `outdated`. To work on the skill itself, symlink a checkout (`ln -s "$PWD/skills/atl" ~/.omp/agent/skills/atl`); `atl` never modifies a link.
 
 ### Writes
 
@@ -161,6 +194,9 @@ agent contract
 - Named write commands send once and never retry. `page update` and `comment update` read the current version and send version+1. A 409 conflict exits 3 with a re-read hint. A write that times out or loses its connection exits 3 with `write_outcome_unknown`: the request may have been applied, so read the target back before retrying.
 - `atl api` and `atl mcp call` require `--yes` for anything that is not a read. Destructive commands (`issue delete`, `issue comment-delete`, `issue attachment delete`, `issue remote-link delete`, `bulk delete`, `page restrict`, `page property delete`, `page permissions remove | set`) also require `--yes`; `issue convert` needs it when the issue has children. `--plan` works without it.
 - `page update` always reads the current body as ADF; a markdown body that would drop inline-comment anchors fails with `inline_comment_anchors_dropped` (`--plan` lists them as `droppedInlineComments`) unless `--force`. `issue attachment download` never overwrites (`file_exists`) without `--force`.
+- Storage bodies are checked locally (`src/adf/storage-check.ts`). `page update` with a storage body also reads the current body as storage and compares what each contains: macros by `ac:name`, mentions, attachments, page links, links (`href`, `ri:url`), dates, tasks, headings (text), layout sections and `ac:adf-node` types, with volatile ids (`ac:macro-id`, `ac:local-id`, `ri:version-at-save`) ignored. Anything the new body lacks warns once on stderr as `content_removed` (never refuses); `--plan` also returns `check: {bytes: {current, new}, removed, added}` (item to count per category, empty categories absent) next to the plan. `page diff` adds `inventory: {removed, added}` between its two versions, absent when the structure did not change, so `page diff ID --from N --to N+1` verifies a write; the default markdown diff fetches both versions' storage for it (4 GETs instead of 2), `--format storage` reuses what it fetched, `--full` is unchanged.
+- `page create` and `page update` refuse a body containing `<script>`, `<style>`, or `data:`/`file:` URLs in `href`/`src`/`ri:url` values (ADF: link mark `href`, `media`/`inlineCard`/`embedCard` `url`) with `body_hygiene` (exit 1, the hint names each finding) unless `--force`; `--plan` reports it as a warning instead. CDATA (code macros) and escaped markup do not count; markdown bodies are not checked (raw HTML stays literal text).
+- `page update --expect-version <n>` is the optimistic-lock guard (the CLI's `snapshotToken`): read the page, edit the body, pass the version you read; if the page is no longer at `n` the command fails before writing (also under `--plan`) with `version_conflict` (exit 3, `next` = `page get <page> --format storage`). `page get` reports the number as `version`. Drafts: the stored number is reset to 1 on save, so on a draft the check only compares against whatever number the GET reports.
 - A command that declares its own `--version` flag (`page get`, `page restore`) owns it; `-V` always prints the CLI version.
 - Page commands (`page get | tree | children | versions | labels | diff | ancestors | properties | permissions list | restriction | operations`, `comment list`) take an exact page title in place of an id or URL, optionally narrowed with `--space KEY`: one match resolves, several fail with `ambiguous_title` (id, space key and title per candidate, plus a `next` command each), none with `not_found` (exit 2); `--type blogpost` searches blog posts.
 
@@ -171,7 +207,7 @@ Page ids, page/blog URLs, tiny links (`/wiki/x/...`), `/display/SPACE/Title` lin
 ## Output contract
 
 - stdout: exactly one JSON value (compact; `--pretty` or `ATL_PRETTY=1` indents). A result over 700 bytes is broken across lines (one list item or object property per line, no indentation) because agent harnesses cut long stdout lines; a line exceeds that only for a single unsplittable string. `jq .` and any JSON parser read it unchanged. Invisible and bidi characters (zero-width, NBSP, control, tag characters) are escaped as `\uXXXX`. `--help`/`--version` are the only text outputs.
-- stderr: JSONL diagnostics, e.g. `{"type":"error","code","category","exitCode","message","hint","next"}`; warnings and hints use `type: "warning" | "hint"`. A warning means the result may be incomplete or suspect: `jql_invalid` (empty JQL result, Jira reported errors in the query), `search_incomplete` (a Confluence page came back short twice), `fields_unmatched` (no `--fields` path matched), `inline_comment_anchors_dropped`. Hints: `child_issues_of_empty` (use `issue tree`), `replies_truncated`, `tree_depth_unchecked`, `empty_search`. Never contains tokens.
+- stderr: JSONL diagnostics, e.g. `{"type":"error","code","category","exitCode","message","hint","next"}`; warnings and hints use `type: "warning" | "hint"`. A warning means the result may be incomplete or suspect: `jql_invalid` (empty JQL result, Jira reported errors in the query), `search_incomplete` (a Confluence page came back short twice), `fields_unmatched` (no `--fields` path matched), `inline_comment_anchors_dropped`, `macros_dropped`, `content_removed` (a storage body lacks macros, links, headings, ... the current page has), `body_hygiene`. Hints: `child_issues_of_empty` (use `issue tree`), `replies_truncated`, `tree_depth_unchecked`, `empty_search`. Never contains tokens.
 - Reads are compact by default; `--full` returns raw API objects. `--fields a,b.c` projects, per item for lists (use `key`, not `items.key`, though the `items.` prefix is accepted); a numeric segment indexes an array and keys the result by index; a list item no path matches stays `{}` so counts hold; no match at all warns `fields_unmatched`. `--output PATH` writes a result's `body` (or `description`) to the file as the original markdown (never the wrapped display lines) and prints the rest of the result with `{path, bytes, lines}` in its place; results without that text are written as JSON and print `{path, bytes}`.
 - Lists return `{items, nextCursor}`; `--limit N`, `--all` (hard cap 1000), `--cursor` (a malformed cursor is `invalid_cursor` on every list).
 - Bodies render ADF to markdown locally (`--format md`, default) and print as an array of lines, so no stdout line exceeds about 700 bytes: the markdown split on `\n`, a prose line over 600 JSON bytes soft-wrapped at spaces (a markdown soft break, same rendering); fenced code, table rows and headings are never wrapped (an over-long one is hard-split between code points, unmarked). `--format adf` returns raw ADF; pages also accept `storage`. ADF is unchanged and the storage `body` is a line array too (`--output` writes the original).
@@ -208,14 +244,14 @@ Markdown: `<u>`, `<sub>` and `<sup>` read and write underline, subscript and sup
 
 ## Environment
 
-| variable | effect |
-|---|---|
-| `ATL_CONFIG_DIR` | config directory (default `%APPDATA%\atl` on Windows, else `$XDG_CONFIG_HOME/atl` or `~/.config/atl`) |
-| `ATL_SITE` | default site host |
-| `ATL_ACCESS_TOKEN` | bearer token override |
-| `ATL_TIMEOUT_MS` | HTTP timeout (default 30000) |
-| `ATL_PRETTY` | `1` or `true` indents JSON |
-| `ATL_MCP_URL` | MCP endpoint for passthrough commands (default `https://mcp.atlassian.com/v1/mcp/authv2`) |
+| variable           | effect                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| `ATL_CONFIG_DIR`   | config directory (default `%APPDATA%\atl` on Windows, else `$XDG_CONFIG_HOME/atl` or `~/.config/atl`) |
+| `ATL_SITE`         | default site host                                                                                     |
+| `ATL_ACCESS_TOKEN` | bearer token override                                                                                 |
+| `ATL_TIMEOUT_MS`   | HTTP timeout (default 30000)                                                                          |
+| `ATL_PRETTY`       | `1` or `true` indents JSON                                                                            |
+| `ATL_MCP_URL`      | MCP endpoint for passthrough commands (default `https://mcp.atlassian.com/v1/mcp/authv2`)             |
 
 ## Develop
 

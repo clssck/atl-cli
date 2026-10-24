@@ -81,7 +81,7 @@ Commit subjects are `type: summary`, imperative, one coherent concern per commit
 
 ## Releases
 
-Maintainers dispatch the Release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) from `main` with a patch, minor, or major bump. See "Install and build" in the [README](README.md) for what it does.
+Maintainers dispatch the Release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) from `main` with a patch, minor, or major bump. See "Install" in the [README](README.md) for what it does.
 
 ## Pull requests
 
