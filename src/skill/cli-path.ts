@@ -59,7 +59,7 @@ export function cliProblem(cli: CliOnPath, expected: string = VERSION): CliProbl
     return {
       code: "atl_not_on_path",
       message: "No `atl` on PATH: agents using the skill cannot run it",
-      hint: `Install it globally: \`bun add -g ${PACKAGE_NAME}\` (or \`npm i -g ${PACKAGE_NAME}\`; both need Bun >= 1.4.4 on PATH). From a source checkout: \`bun link\`. Then open a new shell.`,
+      hint: `Install it globally: \`bun add -g ${PACKAGE_NAME}\` (or \`npm i -g ${PACKAGE_NAME}\`); the launcher needs Node.js and Bun >= 1.4.4 on PATH. From a source checkout: \`bun link\`. Then open a new shell.`,
       next: [["bun", "add", "-g", PACKAGE_NAME]],
     };
   }

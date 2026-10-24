@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Install docs, the skill's Setup table and the `atl_not_on_path` hint name Node.js as a requirement next to Bun: the `atl` bin is a Node launcher, so a Bun-only machine failed with `env: node: No such file or directory` and no guidance.
+
 ## [0.1.0] - 2026-10-24
 
 - Initial `atl` CLI covering every Atlassian MCP v1 tool on direct REST/GraphQL, without calling the MCP server:
