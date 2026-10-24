@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-24
+
 - Initial `atl` CLI covering every Atlassian MCP v1 tool on direct REST/GraphQL, without calling the MCP server:
   - Confluence pages, spaces, comments (including comment editing) and CQL.
   - Jira issues, transitions, links, worklogs, projects and JQL.
@@ -92,3 +94,4 @@
 - `page update --expect-version N` fails with `version_conflict` (exit 3) before writing when the page is no longer at version N, so an edit made on an older read cannot overwrite a concurrent change.
 - Markdown macro comments no longer show the `_parentId` editor parameter, which Confluence rewrites on save and made `page diff` report macro changes nobody made.
 - `page update` with a storage body compares it with the current storage body: `--plan` shows `check: {bytes, removed, added}` (macros, mentions, attachments, page links, links, dates, tasks, headings, layouts) and a `content_removed` warning lists what the new body drops. `page update | create` refuse storage or ADF bodies with `<script>`, `<style>`, `data:` URIs or `file:` URLs (`body_hygiene`, `--force` overrides; a warning under `--plan`). `page diff` adds `inventory: {removed, added}` between the two versions.
+

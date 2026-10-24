@@ -1,10 +1,16 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "atl-cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Agent-oriented JSON CLI for Confluence and Jira Cloud over REST, with a companion agent skill.",
   "homepage": "https://github.com/clssck/atl-cli",
   "repository": "https://github.com/clssck/atl-cli",
   "license": "MIT",
-  "keywords": ["atlassian", "jira", "confluence", "cli", "agent-skills"]
+  "keywords": [
+    "atlassian",
+    "jira",
+    "confluence",
+    "cli",
+    "agent-skills"
+  ]
 }

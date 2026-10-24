@@ -1,6 +1,6 @@
 {
   "name": "@clssck/atl-cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "JSON CLI for Confluence and Jira Cloud over REST, using the Atlassian MCP OAuth flow",
   "homepage": "https://github.com/clssck/atl-cli",
   "license": "MIT",
