@@ -1,5 +1,7 @@
 import { Type } from "../core/schema.ts";
 import { adfToMarkdown, parseAdfBody, type AdfDoc } from "../adf/index.ts";
+import { decodeEntities } from "../adf/entities.ts";
+import { inventoryDelta, storageInventory } from "../adf/storage-check.ts";
 import { defineCommand, type CommandContext, type CommandSpec } from "../core/cli.ts";
 import { AtlError, inputError, type NextCommand } from "../core/errors.ts";
 import type { FetchLike, Query } from "../core/http.ts";
@@ -536,29 +538,7 @@ export function webUrl(session: Session, webui: string | undefined): string | un
 }
 
 const HIGHLIGHT = /@@@(?:end)?hl@@@/g;
-const ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-};
 const SNIPPET_MAX = 160;
-
-/** Decode the HTML entities search results carry: the named ones above and numeric `&#39;` / `&#x27;`. */
-function decodeEntities(text: string): string {
-  return text.replaceAll(
-    /&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6}));/g,
-    (match, name?: string, dec?: string, hex?: string) => {
-      if (name !== undefined) {
-        return ENTITIES[name] ?? match;
-      }
-      const code = dec === undefined ? Number.parseInt(hex ?? "", 16) : Number.parseInt(dec, 10);
-      return code <= 0x10ffff ? String.fromCodePoint(code) : match;
-    },
-  );
-}
 
 /**
  * Search excerpt as one line: highlight markers stripped, HTML entities and literal
@@ -1406,12 +1386,23 @@ export const pageDiff = defineCommand({
           next: [versions],
         });
       }
-      const older = await versionText(session, target, from, storage, versions);
+      // Structural changes are read from storage, so the default markdown diff fetches both
+      // versions' storage too (two more GETs, no extra output bytes when nothing structural moved).
+      const fetchStorage = !storage && !ctx.full;
+      const [older, olderStorage, newerStorage] = await Promise.all([
+        versionText(session, target, from, storage, versions),
+        fetchStorage ? versionText(session, target, from, true, versions) : undefined,
+        fetchStorage ? versionText(session, target, flags.to, true, versions) : undefined,
+      ]);
       if (ctx.full) {
         return { from: older.page, to: newer.page };
       }
       const ops = diffOps(splitLines(older.text), splitLines(newer.text));
       const rows = unifiedRows(ops, flags.context ?? 3);
+      const inventory = inventoryDelta(
+        storageInventory((olderStorage ?? older).text),
+        storageInventory((newerStorage ?? newer).text),
+      );
       return {
         id: newer.page.id,
         title: newer.page.title,
@@ -1423,6 +1414,10 @@ export const pageDiff = defineCommand({
         to,
         added: ops.filter((op) => op.kind === "+").length,
         removed: ops.filter((op) => op.kind === "-").length,
+        inventory:
+          Object.keys(inventory.removed).length + Object.keys(inventory.added).length === 0
+            ? undefined
+            : inventory,
         diff: withSource(rows.flatMap(displayRow), rows.join("\n")),
       };
     });

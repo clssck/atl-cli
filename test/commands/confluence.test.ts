@@ -1336,7 +1336,11 @@ describe("page.ancestors", () => {
   });
 });
 
-function versions(bodies: Record<number, string>, current: number): void {
+function versions(
+  bodies: Record<number, string>,
+  current: number,
+  storage: Record<number, string> = {},
+): void {
   routeBy("/api/v2/pages/123456", (url) => {
     const requested = url.searchParams.get("version");
     const number = requested === null ? current : Number(requested);
@@ -1344,7 +1348,7 @@ function versions(bodies: Record<number, string>, current: number): void {
       ...PAGE,
       status: requested === null ? "current" : "historical",
       version: { number },
-      body: { atlas_doc_format: { value: bodies[number] } },
+      body: { atlas_doc_format: { value: bodies[number] }, storage: { value: storage[number] } },
     };
   });
 }
@@ -1356,7 +1360,7 @@ describe("page.diff", () => {
       3,
     );
     const result = await run(pageDiff, { page: "123456" });
-    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual([null, "2"]);
+    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual([null, "2", "2", null]);
     expect(result).toEqual({
       id: "123456",
       title: "Runbook",
@@ -1377,7 +1381,7 @@ describe("page.diff", () => {
       9,
     );
     const result = await run(pageDiff, { page: "123456" }, { from: 1, to: 4, context: 0 });
-    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual(["4", "1"]);
+    expect(calls.map((c) => c.url.searchParams.get("version"))).toEqual(["4", "1", "1", "4"]);
     expect(result).toMatchObject({ from: 1, to: 4, added: 3, removed: 1 });
     expect(asRecord(result).diff).toEqual([
       "@@ -3,1 +3,1 @@",
@@ -1441,6 +1445,52 @@ describe("page.diff", () => {
     const result = asRecord(await run(pageDiff, { page: "123456" }, {}, ctx({ full: true })));
     expect(asRecord(result.from).version).toEqual({ number: 1 });
     expect(asRecord(result.to).version).toEqual({ number: 2 });
+    expect(calls).toHaveLength(2);
+  });
+
+  describe("inventory", () => {
+    const BEFORE =
+      '<h2>Rich ADF</h2><ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="67da668e-defb-4574-8fed-5a4522a98607"><ac:rich-text-body><p>Panel body</p></ac:rich-text-body></ac:structured-macro><p>Mention <ac:link><ri:user ri:account-id="62a219658783e7006f627f3b" /></ac:link> date <time datetime="2026-11-16" /></p><ac:structured-macro ac:name="toc" ac:schema-version="1" ac:macro-id="b7201282-28bb-40c2-945b-da16c75a4c6c" /><p>end</p>';
+    const AFTER =
+      '<h2>Rich ADF</h2><ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="11111111-defb-4574-8fed-5a4522a98607"><ac:rich-text-body><p>Panel body</p></ac:rich-text-body></ac:structured-macro><p>Mention <ac:link><ri:user ri:account-id="62a219658783e7006f627f3b" /></ac:link> date <time datetime="2026-11-16" /></p><h3>Follow-ups</h3><p>end</p>';
+
+    test("lists the structure that left or arrived between the versions, from storage", async () => {
+      versions({ 1: paragraphs("a"), 2: paragraphs("b") }, 2, { 1: BEFORE, 2: AFTER });
+      const result = asRecord(await run(pageDiff, { page: "123456" }));
+      expect(result.inventory).toEqual({
+        removed: { macros: { toc: 1 } },
+        added: { headings: { "h3 Follow-ups": 1 } },
+      });
+      expect(
+        calls.map((c) => [
+          c.url.searchParams.get("version"),
+          c.url.searchParams.get("body-format"),
+        ]),
+      ).toEqual([
+        [null, "atlas_doc_format"],
+        ["1", "atlas_doc_format"],
+        ["1", "storage"],
+        [null, "storage"],
+      ]);
+    });
+
+    test("--format storage reuses the fetched storage: no extra requests", async () => {
+      versions({}, 2, { 1: BEFORE, 2: AFTER });
+      const result = asRecord(await run(pageDiff, { page: "123456" }, { format: "storage" }));
+      expect(result.inventory).toEqual({
+        removed: { macros: { toc: 1 } },
+        added: { headings: { "h3 Follow-ups": 1 } },
+      });
+      expect(calls).toHaveLength(2);
+    });
+
+    test("versions with the same structure carry no inventory, whatever their ids", async () => {
+      versions({ 1: paragraphs("a"), 2: paragraphs("b") }, 2, {
+        1: BEFORE,
+        2: BEFORE.replaceAll("67da668e", "99999999"),
+      });
+      expect(asRecord(await run(pageDiff, { page: "123456" })).inventory).toBeUndefined();
+    });
   });
 });
 

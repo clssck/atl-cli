@@ -138,7 +138,9 @@ export const COMMENT_FLAGS = {
 
 export type BodyFormat = "md" | "adf" | "storage";
 
-export type LoadedBody = { kind: "adf"; doc: AdfDoc } | { kind: "storage"; value: string };
+export type LoadedBody =
+  | { kind: "adf"; doc: AdfDoc; markdown?: true }
+  | { kind: "storage"; value: string };
 
 export interface BodySource {
   body?: string | undefined;
@@ -286,7 +288,7 @@ async function readBody(
     return { kind: "storage", value: text };
   }
   if (format === "md") {
-    return { kind: "adf", doc: markdownToAdf(text) };
+    return { kind: "adf", doc: markdownToAdf(text), markdown: true };
   }
   try {
     return { kind: "adf", doc: parseAdfBody(text) };
