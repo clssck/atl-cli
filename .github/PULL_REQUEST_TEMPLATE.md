@@ -15,7 +15,7 @@
 
 - [ ] `bun run check` passes (typecheck, type-aware oxlint, oxfmt check, `bun run verify`, `bun test`)
 - [ ] CI is green
-- [ ] One concern in this PR; commit subjects follow `type: summary`
+- [ ] One concern in this PR; commit subjects follow `type(scope): summary` (scope optional)
 - [ ] Added or updated tests that defend observable CLI behaviour (exit codes, JSON stdout, stderr diagnostics)
 - [ ] `CHANGELOG.md` has a bullet under `## [Unreleased]`
 - [ ] README and `skills/atl/SKILL.md` updated if behaviour changed (note the skill's token change below)

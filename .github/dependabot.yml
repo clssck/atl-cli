@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     commit-message:
-      prefix: "ci"
+      prefix: "chore(actions)"
     groups:
       actions:
         patterns: ["*"]
@@ -14,7 +14,7 @@ updates:
     schedule:
       interval: weekly
     commit-message:
-      prefix: "deps"
+      prefix: "chore(deps)"
     groups:
       bun-dependencies:
         patterns: ["*"]

@@ -93,7 +93,7 @@ async function prepareCandidate(bump: string, directory: string): Promise<void> 
   }
   const baseRevision = run(["git", "rev-parse", "HEAD"]);
   // The npm `version` lifecycle syncs plugin.json and cuts the changelog into the commit.
-  run(["npm", "version", bump, "-m", "v%s"]);
+  run(["npm", "version", bump, "-m", "chore(release): v%s"]);
   const pkg: { name: string; version: string } = await Bun.file(
     path.join(root, "package.json"),
   ).json();

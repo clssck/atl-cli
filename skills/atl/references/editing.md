@@ -23,8 +23,9 @@ Ask only when: the target is ambiguous, a new page has no space/parent, access i
 
 Markdown is lossy. `page update` refuses a body that drops macros (`macros_dropped`) or inline-comment anchors (`inline_comment_anchors_dropped`) unless `--force`. Both guards miss native nodes: a markdown write silently turns panels into blockquotes, statuses into `[TEXT]`, mentions into `@Name`, dates into text, and drops layouts; `<details>` is kept as literal text (`atl formats`). NEVER `--force` to get past a guard; switch to storage.
 
-## Procedure (update)
+## Update a page
 
+<procedure>
 1. **Resolve.** URL, id, tiny link or exact title: `atl page get "<title>" --space KEY`. Several hits → accept only an exact title+space match, else ask (`ambiguous_title` lists candidates).
 2. **Fetch and record.** `atl page get 123456 --format storage --output orig.xhtml` prints id, title, spaceId, parent, `version`, url and writes the body. Record `version` as N. Save the edited body as a second file (`edit.xhtml`); leave `orig.xhtml` untouched. ADF: `--format adf --output orig.json` writes the whole result; the document is its `.body` (a `.json` file sent to `page update` must be that document alone).
 3. **Edit deterministically.** Storage often arrives on one line (`"lines":1`): edit by exact string, not by line. Before each replacement, search the file for the old text with the search tool and confirm the match count equals the expected count. Match the stored form: non-ASCII text is named entities (`D&oacute;ra`, `&quot;`), code sits in `<![CDATA[...]]>`. Full rewrite → keep every native block from `orig.xhtml` verbatim (`ac:macro-id`, `ac:ref`, `ri:*`, `ac:adf-*`).
@@ -35,6 +36,7 @@ Markdown is lossy. `page update` refuses a body that drops macros (`macros_dropp
    Read the stderr warnings (none printed = none raised) and the plan's `check` (below; the plan's `body.bytes` is the whole request, `check.bytes` the page body). Anything removed or added that you did not intend → fix the file, replan.
 5. **Apply.** Run the plan's `next` argv (same command without `--plan`). `version_conflict` (exit 3) → someone saved since you read: refetch, reapply the edit to the new body, retry with the new N. A timeout is `write_outcome_unknown`: read back before anything else.
 6. **Verify by intent** (below), then report the link, the new version, what changed, and anything unresolved.
+</procedure>
 
 Metadata: `page update` keeps title, space and parent unless `--title`/`--space`/`--parent` is passed; pass them only on request. A rename (`--title` without `--body`/`--file`) re-sends the current body (`confluence-write.ts`: missing body → `currentAdfBody(current)`), so it never blanks the page. NEVER add a body `<h1>` repeating the title.
 
@@ -95,7 +97,7 @@ From `mcp/gaps-v2.json`; a 3LO token cannot reach these. NEVER fall back to curl
 |---|---|
 | Upload an attachment or image | User uploads in the Confluence UI. Confirm with `atl attachment list <page> --filename x.png`, then reference it: `<ac:image><ri:attachment ri:filename="x.png" /></ac:image>`. NEVER point the body at a local path or inline base64 |
 | Add labels | User adds them in the UI; read with `atl page labels <page>` |
-| Space instructions / templates | Not readable. Ask the user for space conventions; build from `skill://atl/assets/*` or copy an exemplar page (`atl page copy`) |
+| Space instructions / templates | Not readable. Ask the user for space conventions; build from [runbook.xhtml](skill://atl/assets/runbook.xhtml) or [status-report.xhtml](skill://atl/assets/status-report.xhtml), or copy an exemplar page (`atl page copy`) |
 | Complete/reopen tasks | Edit `<ac:task-status>complete</ac:task-status>` in storage |
 
 ## Retired script checks
@@ -107,3 +109,9 @@ From `mcp/gaps-v2.json`; a 3LO token cannot reach these. NEVER fall back to curl
 | ADF `--expect` verifier | `inventory` plus the `unsupported*` search |
 | Wrappers, unclosed tags, long lozenges, headings in cells, duplicate H1, local paths | Manual checks |
 | `snapshotToken`; node `edits`; upload helper | `--expect-version N`; edit the string; UI upload |
+
+<critical>
+- NEVER `--force` past a guard (`body_hygiene` always); NEVER write a rich page from markdown.
+- NEVER write on draft/preview/propose requests; write against the version you read (`--expect-version N`), then verify.
+- NEVER restore when a later version exists.
+</critical>

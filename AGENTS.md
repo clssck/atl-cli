@@ -33,6 +33,7 @@
 ```bash
 bun install --frozen-lockfile
 bun run check        # typecheck, lint (type-aware, warnings denied), fmt:check, tests
+bun run check:skill  # skills/atl house-style gate from $AGENT_PLUGINS_DIR (default ../agent-plugins); not part of `check`; CI pins the agent-plugins commit in `ci.yml`
 bun run fmt          # format; run once at the end of a change, not per file
 bun test <path>      # focused tests
 bun src/main.ts ...  # run the CLI from source
