@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-25
+
 - The agent skill follows the agent-plugins payload grammar: `<instruction>` routing, `<directives>` rules, task-named `<procedure>` workflows and closing `<critical>` recaps; commands, flags and guards are unchanged.
 - The agent skill handles `site_not_accessible`: report the item as blocked and have the user log in with an account that reaches the site (`atl sites` lists reachable sites).
 
