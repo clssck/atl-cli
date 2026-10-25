@@ -14,8 +14,9 @@ Read-only. Narrow search, selective fetch, synthesis by topic, every claim cited
 
 `atl search` is CQL `text ~` plus JQL `text ~`, interleaved; not Rovo: no semantic ranking, no third-party sources. Every word must match, so pass 2-3 key terms (system name, acronym, error text), never a sentence. `--product jira|confluence` and `--type page|issue|comment|...` narrow it. No hits → stderr hint `empty_search` whose `next` holds `title ~` / `summary ~` fallbacks; the index can lag, so try those and variants before calling it a gap.
 
-## Procedure
+## Run a search
 
+<procedure>
 1. Shortest query that names the thing. Run independent searches in parallel: the CQL or JQL from the route table plus `atl search "<2-3 terms>"` (they rank differently; CQL `text ~` alone has missed the most relevant page).
 2. Trim lists: `--fields id,title,spaceKey,lastModified` (pages), `--fields key,summary,status,updated` (issues); `--limit N`. Localized status names: `issue get` adds `statusCategory` (`new`/`indeterminate`/`done`); counts per category: `jql '<JQL>' --group-by statusCategory`.
 3. Fetch only the hits needed, in parallel. Prefer grep to full bodies:
@@ -26,6 +27,7 @@ Read-only. Narrow search, selective fetch, synthesis by topic, every claim cited
 5. Context: a hub page (topic overview) → always `atl page children ID` (sub-pages often hold the specifics). Also `atl issue links KEY --chain "is blocked by"`, `atl issue tree EPIC-1 --depth 2`, `atl page tree ID --depth 2`, `atl graph object <ari|url|key>` (hydrate an ARI), `atl page versions ID --limit 5` (staleness).
 6. Weak results → retry once or twice with variants (synonym, acronym expansion, error code, `title ~` only) before declaring a gap. A page whose title promises the answer but whose body lacks it → check `--format storage` (macro parameters), `page properties`, `comment list`; still nothing → report "page X exists but states no value", never a guessed value.
 7. Over 15 hits → group, curate the top few, offer to narrow. A page of obvious noise → narrow the query instead of paging it; any list your answer relies on → continue with `--cursor <nextCursor>` (`--all` refetches from the start).
+</procedure>
 
 ## Query gotchas (verified on CQL and JQL)
 
@@ -75,3 +77,8 @@ production regression via the fallback gateway (NMS-55 comment, 2026-10-23).
 ```
 
 Page URLs: `url` from `page get`. Issue URLs: `https://<site>/browse/<KEY>` (`atl sites` gives the host).
+
+<critical>
+- NEVER fill gaps from general knowledge; NEVER create, edit, comment or transition while researching.
+- MUST cite every claim; NEVER retry around an access error or bypass it with `atl mcp call`.
+</critical>

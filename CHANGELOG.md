@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- The agent skill follows the agent-plugins payload grammar: `<instruction>` routing, `<directives>` rules, task-named `<procedure>` workflows and closing `<critical>` recaps; commands, flags and guards are unchanged.
+- The agent skill handles `site_not_accessible`: report the item as blocked and have the user log in with an account that reaches the site (`atl sites` lists reachable sites).
+
 ## [0.1.2] - 2026-10-24
 
 - `atl skill status | install | update` and `atl doctor` warn `atl_not_runnable` when an `atl` is on PATH but `atl --version` fails (for example Node.js missing), instead of reporting it as healthy; `next` reruns `--version` to show the error.

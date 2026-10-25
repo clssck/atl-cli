@@ -71,13 +71,15 @@ stdout is exactly one JSON value; stderr carries JSONL diagnostics; exit codes a
 
 `skills/atl/SKILL.md` is token-budgeted: keep it compact and add only what agents cannot get cheaply from `atl <command> --help`. If your change touches it, state the token change in the pull request.
 
+Skill house style (frontmatter, payload grammar, `skill://` links) is checked by the checker in `clssck/agent-plugins`: `bun run check:skill` runs it from `$AGENT_PLUGINS_DIR` (default `../agent-plugins`). CI runs it at a pinned agent-plugins commit; it is not part of `bun run check`, so a contributor without the sibling checkout is unaffected.
+
 ## Changelog
 
 Add flat bullets under `## [Unreleased]` in `CHANGELOG.md` for every user-visible change. The release process cuts that section into the new version.
 
 ## Commit messages
 
-Commit subjects are `type: summary`, imperative, one coherent concern per commit. Use types such as `feat`, `fix`, `eval`, `docs`, `test`, `refactor`, and `chore`.
+Commit subjects follow Conventional Commits: `type(scope): summary`, scope optional, imperative, one coherent concern per commit. Types: `feat`, `fix`, `docs`, `refactor`, `test`, `eval`, `ci`, `chore`. Release and automation commits use `chore(release): vX.Y.Z`, `chore(actions)`, `chore(deps)`.
 
 ## Releases
 

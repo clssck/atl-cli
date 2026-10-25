@@ -33,6 +33,7 @@
     "fmt:check": "oxfmt -c .oxfmtrc.json --check src test scripts bin",
     "verify": "bun scripts/sync-plugin-version.ts --check && bun scripts/cut-changelog.ts --check",
     "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run verify && bun run test",
+    "check:skill": "bun scripts/check-skill.ts",
     "build": "bun build src/main.ts --target=bun --minify --outfile dist/atl.js",
     "compile": "bun build --compile --minify --bytecode src/main.ts --outfile dist/atl",
     "compile:windows": "bun build --compile --minify --bytecode --target=bun-windows-x64 src/main.ts --outfile dist/atl.exe",

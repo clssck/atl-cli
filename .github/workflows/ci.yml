@@ -93,3 +93,28 @@ jobs:
           else
             bun run test:platform
           fi
+
+  skill:
+    # Static house-style gate for skills/atl, run by the checker that lives in clssck/agent-plugins.
+    name: skill
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: clssck/agent-plugins
+          # Bump together with a change to scripts/check-skill.ts or its payload grammar.
+          ref: f9c3d370934d4c61f19e71186e65cb53ad6ae6a9 # main 2026-10-25
+          path: agent-plugins
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Check skills/atl
+        run: bun agent-plugins/scripts/check-skill.ts skills/atl
