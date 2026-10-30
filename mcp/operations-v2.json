@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-22T10:12:43Z",
+  "generatedAt": "2026-10-30T02:04:37Z",
   "endpoint": "https://mcp.atlassian.com/v2/mcp",
-  "count": 192,
+  "count": 191,
   "operations": [
     {
       "name": "createArtifactThumbnailUpload",
@@ -2026,7 +2026,7 @@
       "name": "listConfluenceContent",
       "product": "confluence",
       "executeTool": "executeRead",
-      "description": "List Confluence content of one type within a single space (page, blog, live doc, whiteboard, database, embed, smart link, folder, slide)",
+      "description": "List Confluence content of one type within a single space (page, blog post, live doc, whiteboard, database, embed, smart link, folder, slide)",
       "inputs": [
         {
           "name": "cloudId",
@@ -2897,6 +2897,26 @@
         },
         {
           "name": "isDraft",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "statusTransitionId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "statusId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "healthId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "clearHealth",
           "type": "boolean",
           "required": false
         },
@@ -3947,6 +3967,107 @@
       ]
     },
     {
+      "name": "listJiraBoardSprints",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List a board's sprints — past, active or upcoming — or resolve a sprint name to the numeric sprintId that transitionJiraIssue and manageJiraSprint take.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "boardId",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "listJiraBoards",
+      "product": "jira",
+      "executeTool": "executeRead",
+      "description": "List Jira boards visible to the current user.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "startAt",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "maxResults",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "projectKeyOrId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "includePrivate",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "negateLocationFiltering",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "orderBy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "expand",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "projectTypeLocation",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "filterId",
+          "type": "number",
+          "required": false
+        }
+      ]
+    },
+    {
       "name": "listJiraDashboards",
       "product": "jira",
       "executeTool": "executeRead",
@@ -4114,54 +4235,6 @@
         {
           "name": "maxResults",
           "type": "number",
-          "required": false
-        }
-      ]
-    },
-    {
-      "name": "listJiraIssueComments",
-      "product": "jira",
-      "executeTool": "executeRead",
-      "description": "Get a paginated list of comments for a Jira issue.",
-      "inputs": [
-        {
-          "name": "cloudId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "issueIdOrKey",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "startAt",
-          "type": "number",
-          "required": false
-        },
-        {
-          "name": "maxResults",
-          "type": "number",
-          "required": false
-        },
-        {
-          "name": "orderBy",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "expand",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "responseContentFormat",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "reactionDetail",
-          "type": "string",
           "required": false
         }
       ]
@@ -4590,6 +4663,64 @@
       ]
     },
     {
+      "name": "manageJiraSprint",
+      "product": "jira",
+      "executeTool": "executeDestructive",
+      "description": "Create, add issues to, start, update, or close a Jira sprint; get a sprintId from listJiraBoardSprints. create returns the new sprint's id, which every later action needs. update rewrites the whole...",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "boardId",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "sprintId",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "goal",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "startDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "endDate",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "issueIdsOrKeys",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "storyPoints",
+          "type": "object",
+          "required": false
+        }
+      ]
+    },
+    {
       "name": "uploadAttachmentToJiraIssue",
       "product": "jira",
       "executeTool": "executeWrite",
@@ -4612,6 +4743,29 @@
         },
         {
           "name": "fileId",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "watchJiraIssue",
+      "product": "jira",
+      "executeTool": "executeWrite",
+      "description": "Add or remove the calling user as a watcher on a Jira issue.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "issueIdOrKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
           "type": "string",
           "required": false
         }
@@ -5111,7 +5265,45 @@
       ]
     },
     {
-      "name": "createLoomFolder",
+      "name": "addLoomInteraction",
+      "product": "loom",
+      "executeTool": "executeWrite",
+      "description": "Add a text comment or emoji reaction at a specific point in a Loom video or meeting recording.",
+      "inputs": [
+        {
+          "name": "cloudId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "identifier",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "interactionType",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "timestampMs",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "emoji",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "createLoomObjectFolder",
       "product": "loom",
       "executeTool": "executeWrite",
       "description": "Create a new folder in the current Loom workspace, optionally nested under a parent folder or placed in a space.",
@@ -5144,86 +5336,10 @@
       ]
     },
     {
-      "name": "createLoomVideoComment",
+      "name": "createLoomObjectUpload",
       "product": "loom",
       "executeTool": "executeWrite",
-      "description": "Post a comment on a Loom video, anchored to a specific point in the video.",
-      "inputs": [
-        {
-          "name": "cloudId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "timestamp",
-          "type": "number",
-          "required": true
-        },
-        {
-          "name": "content",
-          "type": "string",
-          "required": true
-        }
-      ]
-    },
-    {
-      "name": "createLoomVideoReaction",
-      "product": "loom",
-      "executeTool": "executeWrite",
-      "description": "Add an emoji reaction to a Loom video, anchored to a specific point in the video.",
-      "inputs": [
-        {
-          "name": "cloudId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "timestamp",
-          "type": "number",
-          "required": true
-        },
-        {
-          "name": "reactionName",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "reactionType",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "category",
-          "type": "string",
-          "required": false
-        }
-      ]
-    },
-    {
-      "name": "createLoomVideoUpload",
-      "product": "loom",
-      "executeTool": "executeWrite",
-      "description": "Step 1 of 2 for uploading a new video to Loom.",
+      "description": "Step 1 of 2 for creating a Loom object from a local video file.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5271,10 +5387,10 @@
       ]
     },
     {
-      "name": "listLoomFolders",
+      "name": "listLoomObjectFolders",
       "product": "loom",
       "executeTool": "executeRead",
-      "description": "List the folders in the current Loom workspace that a video can be moved into, returning each folder's id, name, and parent space.",
+      "description": "List folders in the current Loom workspace.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5289,15 +5405,35 @@
       ]
     },
     {
-      "name": "listLoomVideos",
+      "name": "listLoomObjects",
       "product": "loom",
       "executeTool": "executeRead",
-      "description": "List the Loom videos you own (that you created), most recent first.",
+      "description": "Browse Loom objects you own, that were shared directly with you, or that are visible in your workspace.",
       "inputs": [
         {
           "name": "cloudId",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "scope",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "artifactTypes",
+          "type": "array",
+          "required": false
+        },
+        {
+          "name": "createdAtRange",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false
         },
         {
           "name": "limit",
@@ -5308,95 +5444,14 @@
           "name": "offset",
           "type": "number",
           "required": false
-        },
-        {
-          "name": "sortOrder",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "createdAtFrom",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "createdAtTo",
-          "type": "string",
-          "required": false
         }
       ]
     },
     {
-      "name": "listLoomVideosSharedWithMe",
-      "product": "loom",
-      "executeTool": "executeRead",
-      "description": "List the Loom videos that other people have shared with you, most recent first.",
-      "inputs": [
-        {
-          "name": "cloudId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "limit",
-          "type": "number",
-          "required": false
-        },
-        {
-          "name": "offset",
-          "type": "number",
-          "required": false
-        },
-        {
-          "name": "sortOrder",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "createdAtFrom",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "createdAtTo",
-          "type": "string",
-          "required": false
-        }
-      ]
-    },
-    {
-      "name": "moveLoomVideoToFolder",
+      "name": "publishLoomObject",
       "product": "loom",
       "executeTool": "executeWrite",
-      "description": "Move a Loom video into a folder in the current workspace.",
-      "inputs": [
-        {
-          "name": "cloudId",
-          "type": "string",
-          "required": true
-        },
-        {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "folderId",
-          "type": "string",
-          "required": true
-        }
-      ]
-    },
-    {
-      "name": "publishLoomVideo",
-      "product": "loom",
-      "executeTool": "executeWrite",
-      "description": "Step 2 of 2 for uploading a new video to Loom.",
+      "description": "Step 2 of 2 for creating a Loom object from an uploaded video file.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5417,19 +5472,14 @@
           "name": "folderId",
           "type": "string",
           "required": false
-        },
-        {
-          "name": "spaceId",
-          "type": "string",
-          "required": false
         }
       ]
     },
     {
-      "name": "recoverLoomVideo",
+      "name": "shareLoomObject",
       "product": "loom",
       "executeTool": "executeWrite",
-      "description": "Recover a Loom video that failed to process, by initiating a recovery job to re-process it.",
+      "description": "Send a Loom object, currently an async video or meeting recording, to specific Atlassian users by notification, with an optional message.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5437,37 +5487,9 @@
           "required": true
         },
         {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        }
-      ]
-    },
-    {
-      "name": "shareLoomVideo",
-      "product": "loom",
-      "executeTool": "executeWrite",
-      "description": "Share a Loom video with one or more specific Atlassian users by sending them a notification (with an optional message).",
-      "inputs": [
-        {
-          "name": "cloudId",
+          "name": "identifier",
           "type": "string",
           "required": true
-        },
-        {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
         },
         {
           "name": "userAris",
@@ -5487,10 +5509,10 @@
       ]
     },
     {
-      "name": "updateLoomVideoPermissions",
+      "name": "updateLoomObjectMetadata",
       "product": "loom",
-      "executeTool": "executeDestructive",
-      "description": "Change who can access a Loom video by setting its visibility to OWNER (only you), WORKSPACE (anyone in your workspace), or PUBLIC (anyone with the link).",
+      "executeTool": "executeWrite",
+      "description": "Update the title or description of a Loom object, currently an async video or meeting recording.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5498,27 +5520,27 @@
           "required": true
         },
         {
-          "name": "videoAri",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "visibility",
+          "name": "identifier",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false
         }
       ]
     },
     {
-      "name": "updateLoomVideoTitle",
+      "name": "updateLoomObjectVisibility",
       "product": "loom",
-      "executeTool": "executeWrite",
-      "description": "Rename a Loom video.",
+      "executeTool": "executeDestructive",
+      "description": "Change who can access a Loom object, currently an async video or meeting recording.",
       "inputs": [
         {
           "name": "cloudId",
@@ -5526,17 +5548,12 @@
           "required": true
         },
         {
-          "name": "videoAri",
+          "name": "identifier",
           "type": "string",
-          "required": false
+          "required": true
         },
         {
-          "name": "videoUrl",
-          "type": "string",
-          "required": false
-        },
-        {
-          "name": "title",
+          "name": "visibility",
           "type": "string",
           "required": true
         }
