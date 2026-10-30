@@ -50,22 +50,6 @@
     {
       "name": "updateJiraScreen",
       "product": "jira"
-    },
-    {
-      "name": "listJiraBoards",
-      "product": "jira"
-    },
-    {
-      "name": "listJiraBoardSprints",
-      "product": "jira"
-    },
-    {
-      "name": "manageJiraSprint",
-      "product": "jira"
-    },
-    {
-      "name": "watchJiraIssue",
-      "product": "jira"
     }
   ],
   "gaps": [
@@ -175,6 +159,11 @@
       "evidence": "no public PDF/Word export REST (only body-format=export_view HTML, c_page_export 200)"
     },
     {
+      "name": "getCollaborators",
+      "reason": "out-of-scope",
+      "evidence": "beta, not generally available; user scope: Jira and Confluence only"
+    },
+    {
       "name": "getConfluenceApproval",
       "reason": "no-public-api",
       "evidence": "page approvals have no public REST API"
@@ -235,7 +224,7 @@
       "evidence": "2026-10-22 beyond-mcp `workflow_search` GET /workflows/search -> 401 scope does not match; `workflowscheme_proj` 401; spec => manage:jira-configuration (Current)"
     },
     {
-      "name": "getLoomVideo",
+      "name": "getLoomObjectsContent",
       "reason": "out-of-scope",
       "evidence": "user scope: Jira and Confluence only"
     },
@@ -243,6 +232,21 @@
       "name": "getMyWork",
       "reason": "no-public-api",
       "evidence": "2026-10-22 GraphQL activity.myActivity -> 'Auth category: THIRD_PARTY_OAUTH is not allowed in service activity' (allowed: FIRST_PARTY_OAUTH, SESSION, API_TOKEN); no REST counterpart (v2-catalog.md Rovo/Remix list)"
+    },
+    {
+      "name": "getPeopleInfo",
+      "reason": "out-of-scope",
+      "evidence": "beta, not generally available; user scope: Jira and Confluence only"
+    },
+    {
+      "name": "getWorkActivity",
+      "reason": "out-of-scope",
+      "evidence": "beta, not generally available; user scope: Jira and Confluence only"
+    },
+    {
+      "name": "getWorkPortfolio",
+      "reason": "out-of-scope",
+      "evidence": "beta, not generally available; user scope: Jira and Confluence only"
     },
     {
       "name": "listConfluenceTasks",

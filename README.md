@@ -229,6 +229,7 @@ Markdown: `<u>`, `<sub>` and `<sup>` read and write underline, subscript and sup
   - `scope-not-grantable`: the DCR client only gets the MCP resource's classic scopes; v2 `*:agent-interface` scopes return 401 on REST/GraphQL.
   - `no-public-api`: approvals, reactions, public links, Rovo/AI features, export.
   - `mcp-internal`: discover/execute* tools.
+  - `out-of-scope`: primary v2 tools for products outside Jira and Confluence, such as `getLoomObjectsContent` and the beta people and portfolio tools (`getCollaborators`, `getPeopleInfo`, `getWorkActivity`, `getWorkPortfolio`).
   - Out-of-scope products are listed in `outOfScopeProducts` (assets, jsm, bitbucket, loom, goals, teams, ...).
 - `atl mcp tools | call` remain as parity tooling and an explicit escape hatch for anything above; no other command uses them.
 - `search` is CQL `text ~` plus JQL `text ~`, not Rovo search: the GraphQL `search` root rejects 3LO tokens (`OAuthNoSiteInQuery`), so semantic ranking and third-party sources are unavailable.

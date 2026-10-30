@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- MCP parity data refreshed against the current Atlassian catalogs: Loom's video tools were renamed to object tools, `listJiraIssueComments` became a primary v2 tool, four beta people and portfolio tools appeared, and four Jira operations that were hidden by scope are now listed. No command changes: `listJiraBoards`, `watchJiraIssue` and `listJiraIssueComments` were already covered (`board list`, `issue watch`, `issue comments`), the sprint operations stay `scope-not-grantable` gaps, and the Loom and beta tools are recorded as out of scope.
+
 ## [0.1.3] - 2026-10-25
 
 - The agent skill follows the agent-plugins payload grammar: `<instruction>` routing, `<directives>` rules, task-named `<procedure>` workflows and closing `<critical>` recaps; commands, flags and guards are unchanged.

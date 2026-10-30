@@ -644,10 +644,12 @@
           },
           "limit": {
             "type": "number",
+            "maximum": 250,
             "description": "Max descendants"
           },
           "depth": {
             "type": "number",
+            "maximum": 10,
             "description": "Max depth"
           },
           "cursor": {
@@ -785,7 +787,7 @@
               "draft"
             ],
             "default": "current",
-            "description": "Page status"
+            "description": "\"current\" (default) publishes the body: it updates a published page, or publishes a never-published draft. Use \"draft\" to save changes to a draft without publishing it."
           },
           "spaceId": {
             "type": "string",
