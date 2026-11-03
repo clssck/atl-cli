@@ -26,8 +26,25 @@ Read-only. Narrow search, selective fetch, synthesis by topic, every claim cited
 4. Discussion matters (decisions, reversals): `atl issue comments NMS-55 --grep "idempotency"`, `atl get NMS-55 --comments 5`, `atl comment list <page> --kind all --replies`.
 5. Context: a hub page (topic overview) → always `atl page children ID` (sub-pages often hold the specifics). Also `atl issue links KEY --chain "is blocked by"`, `atl issue tree EPIC-1 --depth 2`, `atl page tree ID --depth 2`, `atl graph object <ari|url|key>` (hydrate an ARI), `atl page versions ID --limit 5` (staleness).
 6. Weak results → retry once or twice with variants (synonym, acronym expansion, error code, `title ~` only) before declaring a gap. A page whose title promises the answer but whose body lacks it → check `--format storage` (macro parameters), `page properties`, `comment list`; still nothing → report "page X exists but states no value", never a guessed value.
-7. Over 15 hits → group, curate the top few, offer to narrow. A page of obvious noise → narrow the query instead of paging it; any list your answer relies on → continue with `--cursor <nextCursor>` (`--all` refetches from the start).
+7. Over 15 hits → group, curate the top few, offer to narrow. A page of obvious noise → narrow the query instead of paging it. Any list your answer relies on → complete it (see Paging).
 </procedure>
+
+## Paging
+
+A list is complete only when stdout has no `nextCursor`, `truncated` or `capped`, and stderr has no `search_incomplete` or other warning or hint about missing data (`tree_depth_unchecked` on `page tree`, `replies_truncated` and `repliesNextCursor` on `comment list --replies`). `search_incomplete`: the Confluence index answered short with no next page; rerun the query, still short → partial. Otherwise report the list as partial and how far you read; NEVER narrow the depth the user asked for ("every", "complete") without saying so. Default page is 25 items (`search`: 10).
+
+For "every descendant", `page tree` boundary nodes with `hasChildren: true` mean deeper pages remain even without a cursor or warning. Continue from those page IDs until the requested tree is covered, or report the depth-limited result as partial. For an explicitly requested depth, stop at that bound and state it.
+
+| Command | More results |
+|---|---|
+| `cql`, `jql`, `issue comments`, `page children` (also `page tree`, `page versions`, `comment list`, `space pages`, `attachment list`, `issue changelog`) | `--limit N`, then `--cursor <nextCursor>` with the same query and filters; or `--all` for up to 1000 items from the start (`--all --cursor C` continues from C). A capped sweep returns 1000 items plus `nextCursor` and `truncated: true`: continue with `--all --cursor <nextCursor>` |
+| `search` | `--limit N` (max 100), then `--cursor`: one cursor covers Confluence and Jira. `--all` → `unknown_flag` (exit 1, no request). If either product errors the whole call fails with no partial stdout: rerun with `--product confluence\|jira` for the other and report the failed product as unsearched. A short Confluence page returns both products' items plus `search_incomplete` |
+| `issue tree` | no cursor; `--limit N` (max 1000), `capped: true` means the tree is partial |
+| `jql --group-by` | scans up to 1000 issues; `capped: true` means partial counts. `--limit`/`--cursor` conflict with this mode |
+| `issue comments --grep` | searches up to 1000 comments without a resumable cursor; `truncated: true` means partial. For more, fetch ordinary paged comments and search locally; do not combine `--grep` with `--limit`/`--cursor` |
+| `page ancestors`, `user find` | `--limit` only; `--all` → `unknown_flag` |
+| `issue worklogs --since/--until` | reads every page itself, but stops at 1000 with `truncated: true` and cannot resume (`--cursor` conflicts): split into non-overlapping date windows; if a window still truncates, report it partial. `--all`, `--limit`, `--cursor` → `conflicting_flags` |
+| `issue get`, `issue links`, `issue attachments`, `page get`, `page diff`, `board sprints` | not paged; `--all` is accepted and ignored |
 
 ## Query gotchas (verified on CQL and JQL)
 
@@ -61,7 +78,9 @@ Read-only. Narrow search, selective fetch, synthesis by topic, every claim cited
 | `http_404` (category `api`; Jira text "does not exist or you do not have permission") | missing **or** hidden | never claim it does not exist |
 | User can open the item in a browser but atl gets 401/403/404, or it is absent from search | permission, token scope, or an org Data Security Policy (atl cannot tell which) | report as blocked; name key/title and space |
 
-Never retry around an access error or switch to `atl mcp call` to bypass it.
+After `http_403`/`http_404` on an item, stop content requests for it: no `page versions`, `comment list`, `page children`, space-wide `cql`, title search or other site to explain it. Diagnose with metadata only (`atl sites`: does the login cover the host?), then report the item (key, URL or id), the error code, "missing or hidden", and that only the user's browser or the space/project admin settles it.
+
+`atl auth status` reads local token metadata and sends no request: `loggedIn: true` does not show that Atlassian accepts the token or grants access, so it never rules out a login, scope or permission cause.
 
 ## Answer shape
 
@@ -76,7 +95,7 @@ production regression via the fallback gateway (NMS-55 comment, 2026-10-23).
 - [NMS-55](https://<site>/browse/NMS-55) - Duplicate charge on payment retry
 ```
 
-Page URLs: `url` from `page get`. Issue URLs: `https://<site>/browse/<KEY>` (`atl sites` gives the host).
+Page URLs: `url` from `page get`. `cql` and `search` page hits omit it. When the page cannot be fetched and the site host, `spaceKey` and `id` are all known from the hit, `https://<site>/wiki/spaces/<spaceKey>/pages/<id>` is the form `page get` prints. Such a link only points at the page: its body is unread, so it is never evidence for a claim. Issue URLs: `https://<site>/browse/<KEY>` (`atl sites` gives the host).
 
 <critical>
 - NEVER fill gaps from general knowledge; NEVER create, edit, comment or transition while researching.
