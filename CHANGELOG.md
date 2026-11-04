@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-04
+
 - MCP parity data refreshed against the current Atlassian catalogs: Loom's video tools were renamed to object tools, `listJiraIssueComments` became a primary v2 tool, four beta people and portfolio tools appeared, and four Jira operations that were hidden by scope are now listed. No command changes: `listJiraBoards`, `watchJiraIssue` and `listJiraIssueComments` were already covered (`board list`, `issue watch`, `issue comments`), the sprint operations stay `scope-not-grantable` gaps, and the Loom and beta tools are recorded as out of scope.
 - The companion skill now follows command-specific paging and read filters, reports partial or inaccessible evidence, treats `next` as advice within the user's authorization, stops long or unspecified rate-limit waits, refuses guard bypasses, and reads back ambiguous writes before retrying.
 - Published-page restoration in the skill uses `page update --expect-version` with the saved or historical storage body, rather than `page restore`, so a concurrent save causes a conflict instead of being overwritten. Draft restoration stops because draft saves retain version 1.
