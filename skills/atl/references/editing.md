@@ -33,8 +33,8 @@ Markdown is lossy. `page update` refuses a body that drops macros (`macros_dropp
    ```bash
    atl page update 123456 --file edit.xhtml --expect-version N --message 'Fix rollback steps' --plan
    ```
-   Read the stderr warnings (none printed = none raised) and the plan's `check` (below; the plan's `body.bytes` is the whole request, `check.bytes` the page body). Anything removed or added that you did not intend → fix the file, replan.
-5. **Apply.** Run the plan's `next` argv (same command without `--plan`). `version_conflict` (exit 3) → someone saved since you read: refetch, reapply the edit to the new body, retry with the new N. A timeout is `write_outcome_unknown`: read back before anything else.
+   Read the stderr warnings (none printed = none raised) and the plan's `check` (below; the plan's `body.bytes` is the whole request, `check.bytes` the page body). Anything removed or added that you did not intend → fix the file, replan. A `macros_dropped`, `inline_comment_anchors_dropped` or `body_hygiene` warning still exits 0, but `next` will be refused: fix the file, replan. If clearing it would undo a macro or anchor removal the user asked for, stop with the file unwritten: report the refusal and that the user can remove it in the Confluence UI. NEVER request, offer or use `--force`, and NEVER ask the user to approve it.
+5. **Apply.** Run the plan's `next` argv (same command without `--plan`). `version_conflict` (exit 3): the page changed after your read, possibly by your own failed apply. Read the current body and `page versions`: the requested edit already present → verify and stop; otherwise reapply it to the current body and replan with the new N. An uncertain PUT failure (`write_outcome_unknown`, `http_5xx`, `invalid_json`) may have written, whatever its hint says (a 502 says "Retry shortly"): read back before anything else with `atl page versions 123456 --limit 3`, then the current body. Your change present → applied: verify, NEVER resend. Version still N, change absent and no edit by anyone else → replan against the same N. Anything unresolved → stop and report; NEVER resend automatically. A guard refusal (exit 1) wrote nothing.
 6. **Verify by intent** (below), then report the link, the new version, what changed, and anything unresolved.
 </procedure>
 
@@ -54,7 +54,7 @@ Then run `next`. `--status draft` creates it unpublished. No `--parent` → spac
 |---|---|---|
 | `check` | `page update --plan` result | `bytes: {current, new}` (a big drop = accidental fragment); `removed` / `added`: item → count per category: macros (by `ac:name`), mentions, attachments, page links, links, dates, tasks, headings (`h2 Title`), layouts, `ac:adf-node` types. Volatile ids (`ac:macro-id`, `ac:local-id`, `ri:version-at-save`) ignored; empty categories absent |
 | `content_removed` | stderr warning on update | New body lacks something the current page has; never refuses, so read it |
-| `macros_dropped`, `inline_comment_anchors_dropped` | refusal (warning under `--plan`) | Body loses macros or comment anchors; `--force` only for an intended removal. Plan lists `droppedMacros`, `droppedInlineComments` |
+| `macros_dropped`, `inline_comment_anchors_dropped` | refusal (warning under `--plan`) | Body loses macros or comment anchors. Put them back in the storage or ADF body; NEVER `--force`. Plan lists `droppedMacros`, `droppedInlineComments` |
 | `body_hygiene` | refusal on update and create (warning under `--plan`) | `<script>`, `<style>`, `data:` or `file:` URLs in `href`/`src`/`ri:url`. Fix the body; NEVER `--force` it |
 | `version_conflict` | `--expect-version N` | Page is not at N |
 
@@ -68,6 +68,7 @@ Then run `next`. `--status draft` creates it unpublished. No `--parent` → spac
 - `]]>` never inside a CDATA body: split it as `]]]]><![CDATA[>`.
 - New `ac:task-id` values continue the page's numbering; never renumber, never invent `ac:task-uuid`.
 - Page links: confirm the exact title with `atl cql` (a missing title renders broken, not as an error).
+- No `<html>`/`<body>` wrapper and no local paths (`/Users/`, `C:\`) in a storage body: neither is detected.
 
 ## Verify after the write (version N+1)
 
@@ -82,12 +83,30 @@ Diagrams (Mermaid, draw.io), images, embeds added or touched → also check the 
 
 ## Damage recovery
 
+Restoration and damage recovery require the unversioned page read to report `status: current` (published). A draft keeps version 1 across saves, so `--expect-version 1` cannot guard concurrent edits. Draft, missing or other status → stop before planning or applying a restoration; report the limitation and offer the Confluence UI.
+
+For a published page, recover through `page update --expect-version`, NEVER `page restore`: restore has no expected-version guard, so it can overwrite a save made after your check.
+
 ```bash
+atl page get 123456 --format storage --output damaged.xhtml  # require status current; records N+1
 atl page versions 123456 --limit 3     # newest first: number, author, message
 atl whoami                            # your display name
+atl page update 123456 --file orig.xhtml --expect-version N+1 --message 'Revert: <your message>' --plan
 ```
 
-Newest version is N+1 and its author is you → `atl page restore 123456 --version N --message 'Revert: <your message>'` (keeps the current title unless `--restore-title`), then verify and report. Restore regenerates `ac:macro-id`s; that is not damage. Any later version exists → NEVER restore (it discards someone else's edit); report the versions involved. A damaged new page has no prior version: report it.
+Newest version is N+1 and its author is you → put back the body you fetched at N (`orig.xhtml`, or `atl page get 123456 --version N --format storage --output orig.xhtml`) with the `--plan` above. `check` must be the inverse of your damaging edit and nothing else; fix guard warnings as in step 4, then run `next` and verify with `page diff`. The current title stays unless the user asked to restore it (`--title '<title at N>'`). Any later version exists, or `version_conflict` → STOP and report the versions involved: NEVER raise the expected version, NEVER reapply the old snapshot over another save. A damaged new page has no prior version: report it.
+
+### Restore a requested version
+
+The user names version N of a page that is now at M:
+
+```bash
+atl page get 123456 --format storage --output current.xhtml  # require status current; records M
+atl page get 123456 --version N --format storage --output target.xhtml
+atl page update 123456 --file target.xhtml --expect-version M --message 'Restore version N: <why>' --plan
+```
+
+Restoring discards the edits in N+1..M: name their authors (`page versions`) in your report. Inspect `check` and guard warnings, run `next`, verify against `target.xhtml`. `version_conflict` (someone saved after M) → STOP and report who saved what: NEVER raise the expected version, NEVER restore over their save.
 
 ## Gaps vs the Rovo MCP
 
@@ -100,18 +119,8 @@ From `mcp/gaps-v2.json`; a 3LO token cannot reach these. NEVER fall back to curl
 | Space instructions / templates | Not readable. Ask the user for space conventions; build from [runbook.xhtml](skill://atl/assets/runbook.xhtml) or [status-report.xhtml](skill://atl/assets/status-report.xhtml), or copy an exemplar page (`atl page copy`) |
 | Complete/reopen tasks | Edit `<ac:task-status>complete</ac:task-status>` in storage |
 
-## Retired script checks
-
-| Old check | Now |
-|---|---|
-| Scripts, styles, base64, `file:` | `body_hygiene` |
-| Dropped macros, mentions, links, dates, tasks, attachments, headings, layouts; size delta | plan `check`, `content_removed`, `macros_dropped`; after the write `page diff` `inventory` |
-| ADF `--expect` verifier | `inventory` plus the `unsupported*` search |
-| Wrappers, unclosed tags, long lozenges, headings in cells, duplicate H1, local paths | Manual checks |
-| `snapshotToken`; node `edits`; upload helper | `--expect-version N`; edit the string; UI upload |
-
 <critical>
-- NEVER `--force` past a guard (`body_hygiene` always); NEVER write a rich page from markdown.
+- NEVER `--force` past a guard; NEVER write a rich page from markdown.
 - NEVER write on draft/preview/propose requests; write against the version you read (`--expect-version N`), then verify.
-- NEVER restore when a later version exists.
+- Restoration MUST require `status: current`; NEVER recover with `page restore` or overwrite a later version when recovering.
 </critical>
